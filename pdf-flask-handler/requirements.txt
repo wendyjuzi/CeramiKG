@@ -1,0 +1,14 @@
+# 基础框架（降级以适配 before_first_request）
+Flask==2.2.5
+Werkzeug==2.2.3  # 配合旧版 Flask 建议锁定 Werkzeug，避免版本过高
+Flask-Cors==5.0.0
+gunicorn==22.0.0
+
+# 数据库（降级以适配 .paginate() 和旧版 ORM 语法）
+Flask-SQLAlchemy==2.5.1
+SQLAlchemy==1.4.47
+PyMySQL==1.1.1
+cryptography==43.0.1  # 连接 MySQL 8.0 容器必须包含此库，用于身份验证
+
+# 搜索引擎（保持 8.x 即可，代码中已有版本兼容处理）
+elasticsearch==8.15.1

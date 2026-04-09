@@ -1,0 +1,9 @@
+GET http://127.0.0.1:8000/api/ontology/prompt/d3586c6f-93aa-4fcf-9814-c4de7fad781b
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/hello/User1
+Accept: application/json
+
+###

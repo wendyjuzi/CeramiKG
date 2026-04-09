@@ -1,0 +1,38 @@
+2025-09-12 10:56:12,356 - __main__ - INFO - 初始化上传目录: C:\Users\huiyu\Desktop\tobacco\pdf-flask-handler\uploads\maintenance
+2025-09-12 10:56:12,358 - __main__ - INFO - 初始化上传目录: C:\Users\huiyu\Desktop\tobacco\pdf-flask-handler\uploads\experience
+2025-09-12 10:56:12,359 - __main__ - INFO - 初始化上传目录: C:\Users\huiyu\Desktop\tobacco\pdf-flask-handler\uploads\operation
+2025-09-12 10:56:12,376 - __main__ - INFO - 数据库模型同步完成
+2025-09-12 10:56:12,376 - __main__ - INFO - ==================================================
+2025-09-12 10:56:12,376 - __main__ - INFO - 文件管理服务启动成功
+2025-09-12 10:56:12,376 - __main__ - INFO - 服务地址: http://0.0.0.0:8001
+2025-09-12 10:56:12,376 - __main__ - INFO - 允许上传文件类型: xls, docx, pptx, ppt, pdf, png, doc, jpg, jpeg, xlsx
+2025-09-12 10:56:12,377 - __main__ - INFO - 最大文件大小: 50 MB
+2025-09-12 10:56:12,377 - __main__ - INFO - ==================================================
+2025-09-12 10:56:16,431 - __main__ - INFO - 初始化上传目录: C:\Users\huiyu\Desktop\tobacco\pdf-flask-handler\uploads\maintenance
+2025-09-12 10:56:16,432 - __main__ - INFO - 初始化上传目录: C:\Users\huiyu\Desktop\tobacco\pdf-flask-handler\uploads\experience
+2025-09-12 10:56:16,432 - __main__ - INFO - 初始化上传目录: C:\Users\huiyu\Desktop\tobacco\pdf-flask-handler\uploads\operation
+2025-09-12 10:56:16,478 - __main__ - INFO - 数据库模型同步完成
+2025-09-12 10:56:16,478 - __main__ - INFO - ==================================================
+2025-09-12 10:56:16,478 - __main__ - INFO - 文件管理服务启动成功
+2025-09-12 10:56:16,479 - __main__ - INFO - 服务地址: http://0.0.0.0:8001
+2025-09-12 10:56:16,479 - __main__ - INFO - 允许上传文件类型: xls, jpeg, ppt, pptx, png, xlsx, pdf, doc, jpg, docx
+2025-09-12 10:56:16,479 - __main__ - INFO - 最大文件大小: 50 MB
+2025-09-12 10:56:16,479 - __main__ - INFO - ==================================================
+2025-09-12 10:56:26,545 - __main__ - ERROR - 获取文件列表失败: (pymysql.err.OperationalError) (1054, "Unknown column 'maintenance_files.mime_type' in 'field list'")
+[SQL: SELECT anon_1.maintenance_files_id AS anon_1_maintenance_files_id, anon_1.maintenance_files_file_name AS anon_1_maintenance_files_file_name, anon_1.maintenance_files_file_size AS anon_1_maintenance_files_file_size, anon_1.upload_time AS anon_1_upload_time, anon_1.maintenance_files_es_code AS anon_1_maintenance_files_es_code, anon_1.maintenance_files_mime_type AS anon_1_maintenance_files_mime_type, anon_1.repository AS anon_1_repository 
+FROM (SELECT maintenance_files.id AS maintenance_files_id, maintenance_files.file_name AS maintenance_files_file_name, maintenance_files.file_size AS maintenance_files_file_size, maintenance_files.upload_time AS upload_time, maintenance_files.es_code AS maintenance_files_es_code, maintenance_files.mime_type AS maintenance_files_mime_type, %(param_1)s AS repository 
+FROM maintenance_files UNION ALL SELECT experience_files.id AS experience_files_id, experience_files.file_name AS experience_files_file_name, experience_files.file_size AS experience_files_file_size, experience_files.upload_time AS upload_time, experience_files.es_code AS experience_files_es_code, experience_files.mime_type AS experience_files_mime_type, %(param_2)s AS repository 
+FROM experience_files UNION ALL SELECT operation_files.id AS operation_files_id, operation_files.file_name AS operation_files_file_name, operation_files.file_size AS operation_files_file_size, operation_files.upload_time AS upload_time, operation_files.es_code AS operation_files_es_code, operation_files.mime_type AS operation_files_mime_type, %(param_3)s AS repository 
+FROM operation_files) AS anon_1 ORDER BY upload_time DESC 
+ LIMIT %(param_4)s, %(param_5)s]
+[parameters: {'param_1': 'maintenance', 'param_2': 'experience', 'param_3': 'operation', 'param_4': 0, 'param_5': 10}]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+2025-09-12 10:56:32,431 - __main__ - ERROR - 获取文件列表失败: (pymysql.err.OperationalError) (1054, "Unknown column 'maintenance_files.mime_type' in 'field list'")
+[SQL: SELECT anon_1.maintenance_files_id AS anon_1_maintenance_files_id, anon_1.maintenance_files_file_name AS anon_1_maintenance_files_file_name, anon_1.maintenance_files_file_size AS anon_1_maintenance_files_file_size, anon_1.upload_time AS anon_1_upload_time, anon_1.maintenance_files_es_code AS anon_1_maintenance_files_es_code, anon_1.maintenance_files_mime_type AS anon_1_maintenance_files_mime_type, anon_1.repository AS anon_1_repository 
+FROM (SELECT maintenance_files.id AS maintenance_files_id, maintenance_files.file_name AS maintenance_files_file_name, maintenance_files.file_size AS maintenance_files_file_size, maintenance_files.upload_time AS upload_time, maintenance_files.es_code AS maintenance_files_es_code, maintenance_files.mime_type AS maintenance_files_mime_type, %(param_1)s AS repository 
+FROM maintenance_files UNION ALL SELECT experience_files.id AS experience_files_id, experience_files.file_name AS experience_files_file_name, experience_files.file_size AS experience_files_file_size, experience_files.upload_time AS upload_time, experience_files.es_code AS experience_files_es_code, experience_files.mime_type AS experience_files_mime_type, %(param_2)s AS repository 
+FROM experience_files UNION ALL SELECT operation_files.id AS operation_files_id, operation_files.file_name AS operation_files_file_name, operation_files.file_size AS operation_files_file_size, operation_files.upload_time AS upload_time, operation_files.es_code AS operation_files_es_code, operation_files.mime_type AS operation_files_mime_type, %(param_3)s AS repository 
+FROM operation_files) AS anon_1 ORDER BY upload_time DESC 
+ LIMIT %(param_4)s, %(param_5)s]
+[parameters: {'param_1': 'maintenance', 'param_2': 'experience', 'param_3': 'operation', 'param_4': 0, 'param_5': 10}]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)

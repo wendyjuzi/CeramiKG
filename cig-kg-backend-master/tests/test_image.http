@@ -1,0 +1,4 @@
+GET http://127.0.0.1:8000/api/image/01955ade-9ab3-792b-b8fd-a8280366d360_12_493_888_748_559_0.jpg
+Accept: blob
+
+###
