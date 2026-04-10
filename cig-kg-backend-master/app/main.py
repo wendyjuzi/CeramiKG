@@ -29,9 +29,9 @@ app.add_middleware(
 # app.include_router(ontology.router, prefix="/api/ontology", tags=["Ontology"])
 # app.include_router(build.router, prefix="/api/build", tags=["Build"])
 # app.include_router(entitiy.router, prefix="/api/entities", tags=["Entities"])
-app.include_router(graph.router, prefix="/api/graph", tags=["Graph Construction"])
+# app.include_router(graph.router, prefix="/api/graph", tags=["Graph Construction"])
 
-# app.include_router(graph_2.router, prefix="/api/graph", tags=["Graph Construction"])
+app.include_router(graph_2.router, prefix="/api/graph", tags=["Graph Construction"])
 app.include_router(document_governance.router, tags=["Document Governance"])
 
 
