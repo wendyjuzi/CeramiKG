@@ -67,6 +67,93 @@ def init_elasticsearch():
 # 初始化 ES 客户端
 es_client = init_elasticsearch()
 
+# --- RAG Adapter 初始化 ---
+try:
+    from rag_adapter import RAGAdapter
+    if es_client:
+        rag_adapter = RAGAdapter(es_client)
+        logger.info("✅ RAG DeepDoc Adapter 初始化成功")
+    else:
+        rag_adapter = None
+        logger.warning("RAGAdapter 未初始化 (依赖 ES)")
+except ImportError as e:
+    rag_adapter = None
+    logger.error(f"❌ RAGAdapter 导入失败: {e}")
+except Exception as e:
+    rag_adapter = None
+    logger.error(f"❌ RAGAdapter 初始化出错: {e}")
+
+# --- 引入 AI 用于问答 ---
+from openai import OpenAI
+API_KEY = os.getenv("API_KEY", "")
+BASE_URL = os.getenv("BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "qwen-plus")
+
+def get_llm_client():
+    if not API_KEY:
+        return None
+    return OpenAI(api_key=API_KEY, base_url=BASE_URL)
+
+
+def parse_and_index_with_rag(file_path: str, doc_name: str):
+    """使用 RAGFlow DeepDoc 解析并索引文件"""
+    if not rag_adapter:
+        raise RuntimeError("RAG service not available")
+    return rag_adapter.parse_and_index(file_path, doc_name=doc_name)
+
+# 暂停以下上传接口的使用，将RAG解析能力整合到主上传接口中
+# @app.route('/rag/upload', methods=['POST'])
+# def rag_upload():
+#     """
+#     RAGFlow DeepDoc 上传接口
+#     """
+#     if not rag_adapter:
+#         return jsonify({'error': 'RAG service not available'}), 503
+#     if 'file' not in request.files:
+#         return jsonify({'error': 'No file part'}), 400
+#     file = request.files['file']
+#     if file.filename == '':
+#         return jsonify({'error': 'No selected file'}), 400
+#     filename = file.filename
+#     upload_folder = os.getenv('UPLOAD_FOLDER', '/app/uploads')
+#     if not os.path.exists(upload_folder):
+#         os.makedirs(upload_folder)
+#     file_path = os.path.join(upload_folder, filename)
+#     file.save(file_path)
+#     try:
+#         # 使用 DeepDoc 解析
+#         count = parse_and_index_with_rag(file_path, doc_name=filename)
+#         return jsonify({'message': 'File processed with RAGFlow DeepDoc', 'doc_name': filename, 'chunks_count': count})
+#     except Exception as e:
+#         logger.error(f"处理文件失败: {e}")
+#         return jsonify({'error': str(e)}), 500
+
+@app.route('/rag/ask', methods=['POST'])
+def rag_ask():
+    if not rag_adapter:
+        return jsonify({'error': 'RAG service not available'}), 503
+    data = request.json
+    question = data.get('question')
+    if not question:
+        return jsonify({'error': 'Missing question'}), 400
+    try:
+        chunks = rag_adapter.search(question, top_k=5)
+    except Exception as e:
+        logger.error(f"Search failed: {e}")
+        return jsonify({'error': f"Search failed: {e}"}), 500
+    llm = get_llm_client()
+    if not llm:
+        return jsonify({'answer': "LLM not configured. Returning retrieved chunks.", 'chunks': chunks})
+    try:
+        context = "\n\n".join([f"片段 {i+1} : {c['content'][:500]}" for i, c in enumerate(chunks)])
+        system_prompt = f"你是一个智能助手。请基于以下上下文回答用户的问题。如果上下文中没有答案，请如实告知。\n\n上下文:\n{context}"
+        response = llm.chat.completions.create(model=MODEL_NAME, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": question}])
+        answer = response.choices[0].message.content
+        return jsonify({'answer': answer, 'chunks': chunks})
+    except Exception as e:
+        logger.error(f"LLM generation failed: {e}")
+        return jsonify({'error': f"Generation failed: {e}"}), 500
+
 # --- 数据库配置 ---
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv(
     'DATABASE_URL',
@@ -116,11 +203,17 @@ def init_db_schema():
         logger.info("数据库模型同步完成（新增字段已创建）")
 
 
-@app.before_first_request
 def bootstrap_app():
     """首次请求前初始化资源（兼容 Gunicorn/Docker）"""
     init_upload_dirs()
     init_db_schema()
+
+# Manually run bootstrap within app context (since Flask 2.3+ removed before_first_request)
+with app.app_context():
+    try:
+        bootstrap_app()
+    except Exception as e:
+        logger.warning(f"Bootstrap optional step failed (db might not be ready): {e}")
 
 
 # --- 数据库模型 ---
@@ -331,6 +424,8 @@ def save_file(file, library_type):
         json_file_path = None
         if MINERU_ENABLED and file_extension.lower() in MINERU_ALLOWED_EXTENSIONS:
             json_file_path, _ = parse_with_mineru(file_path, file_id)
+
+        parse_and_index_with_rag(file_path, original_filename)
 
         # 6. 写入数据库（使用新的Document模型）
         pdf_path = file_path if file_extension.lower() == '.pdf' else None
