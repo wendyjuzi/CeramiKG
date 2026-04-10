@@ -10,8 +10,10 @@ services:
     ports:
       - "${FRONTEND_PORT:-8080}:80"
     depends_on:
-      - cig-kg-backend
-      - pdf-flask-handler
+      cig-kg-backend:
+        condition: service_healthy
+      pdf-flask-handler:
+        condition: service_healthy
 
   pdf-flask-handler:
     build:
@@ -36,9 +38,17 @@ services:
       FLASK_DEBUG: "${FLASK_DEBUG}"
     volumes:
       - ./pdf-flask-handler/uploads:/app/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 8001)); s.close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       mysql:
-        condition: service_started
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
       elasticsearch:
         condition: service_healthy
 
@@ -73,11 +83,19 @@ services:
       - ./pdf-flask-handler/uploads:/app/uploads:ro
       - ./cig-kg-backend-master:/app:cached
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 8000)); s.close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       mysql:
-        condition: service_started
+        condition: service_healthy
       mongo:
-        condition: service_started
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
       neo4j:
         condition: service_healthy  # 等待 Neo4j 健康
   mysql:
@@ -95,6 +113,12 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
       - ./mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
 
   mongo:
     image: mongo:6
@@ -108,6 +132,12 @@ services:
       - "${MONGO_PORT}:27017"
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\" | grep 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.4
@@ -126,6 +156,11 @@ services:
       - "${ELASTICSEARCH_PORT}:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
       interval: 30s
