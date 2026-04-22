@@ -95,10 +95,14 @@ def get_llm_client():
     return OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 
-def parse_and_index_with_rag(file_path: str, doc_name: str):
-    """使用 RAGFlow DeepDoc 解析并索引文件"""
+def parse_and_index_with_rag(file_path: str, doc_name: str, markdown_text: str | None = None):
+    """优先索引 MinerU 产出的 Markdown，缺失时回退 DeepDoc。"""
     if not rag_adapter:
         raise RuntimeError("RAG service not available")
+
+    if markdown_text and markdown_text.strip():
+        return rag_adapter.parse_markdown_and_index(markdown_text, doc_name=doc_name)
+
     return rag_adapter.parse_and_index(file_path, doc_name=doc_name)
 
 # 暂停以下上传接口的使用，将RAG解析能力整合到主上传接口中
@@ -336,8 +340,8 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def parse_with_mineru(file_path: str, file_id: str) -> tuple[str, str]:
-    """使用 MinerU 解析文件，返回 (json_file_path, json_content)"""
+def parse_with_mineru(file_path: str, file_id: str) -> tuple[str, str, str | None, str | None]:
+    """使用 MinerU 解析文件，返回 (json_file_path, json_content, md_file_path, md_content)。"""
     if not MINERU_ENABLED:
         raise Exception("MinerU 解析已禁用")
 
@@ -358,7 +362,7 @@ def parse_with_mineru(file_path: str, file_id: str) -> tuple[str, str]:
         table_enable=True,
         f_draw_layout_bbox=False,
         f_draw_span_bbox=False,
-        f_dump_md=False,
+        f_dump_md=True,
         f_dump_middle_json=False,
         f_dump_model_output=False,
         f_dump_orig_pdf=False,
@@ -381,7 +385,20 @@ def parse_with_mineru(file_path: str, file_id: str) -> tuple[str, str]:
     with open(json_file_path, "r", encoding="utf-8") as f:
         json_content = f.read()
 
-    return json_file_path, json_content
+    md_file_path = os.path.join(parse_dir, f"{file_id}.md")
+    if not os.path.exists(md_file_path):
+        md_file_path = None
+        for name in os.listdir(parse_dir):
+            if name.lower().endswith(".md"):
+                md_file_path = os.path.join(parse_dir, name)
+                break
+
+    md_content = None
+    if md_file_path and os.path.exists(md_file_path):
+        with open(md_file_path, "r", encoding="utf-8") as f:
+            md_content = f.read()
+
+    return json_file_path, json_content, md_file_path, md_content
 
 
 def save_file(file, library_type):
@@ -420,12 +437,13 @@ def save_file(file, library_type):
         # 4. 保存物理文件到本地
         file.save(file_path)
 
-        # 5. MinerU 解析（仅支持 PDF/图片）
+        # 5. MinerU 解析（仅支持 PDF/图片），优先使用其 Markdown 结果进行分块
         json_file_path = None
+        markdown_content = None
         if MINERU_ENABLED and file_extension.lower() in MINERU_ALLOWED_EXTENSIONS:
-            json_file_path, _ = parse_with_mineru(file_path, file_id)
+            json_file_path, _, _, markdown_content = parse_with_mineru(file_path, file_id)
 
-        parse_and_index_with_rag(file_path, original_filename)
+        parse_and_index_with_rag(file_path, original_filename, markdown_text=markdown_content)
 
         # 6. 写入数据库（使用新的Document模型）
         pdf_path = file_path if file_extension.lower() == '.pdf' else None

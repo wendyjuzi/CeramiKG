@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import re
 from elasticsearch import Elasticsearch
 
 # 确保能找到 ragflow 源码
@@ -25,12 +26,13 @@ try:
 except ImportError:
     pass
 
+
 class RAGAdapter:
     def __init__(self, es_client: Elasticsearch, index_name="rag_docs_deepdoc"):
         self.es = es_client
         self.index_name = index_name
         self.parser = RAGFlowPdfParser() if RAGFlowPdfParser else None
-        
+
         # 确保索引存在
         if not self.es.indices.exists(index=self.index_name):
             self.create_index()
@@ -76,7 +78,7 @@ class RAGAdapter:
             doc_name = os.path.basename(file_path)
 
         logging.info(f"开始使用 RAGFlow DeepDoc 解析文件: {file_path}")
-        
+
         # 读取文件二进制
         with open(file_path, 'rb') as f:
             file_content = f.read()
@@ -87,31 +89,77 @@ class RAGAdapter:
             # fnm accepts bytes
             res = self.parser(file_content)
             if isinstance(res, tuple):
-                 chunks = res[0]
+                chunks = res[0]
             else:
-                 chunks = res
+                chunks = res
         except Exception as e:
             logging.error(f"DeepDoc 解析失败: {e}")
             raise e
 
         logging.info(f"解析完成，共 {len(chunks)} 个块，开始存入 ES")
+        return self._index_chunks(chunks, doc_name=doc_name)
 
-        # 批量写入 ES
+    def parse_markdown_and_index(self, markdown_text, doc_name=None):
+        """将 MinerU 产出的 Markdown 文本进行分块并存入 ES。"""
+        if not markdown_text:
+            raise ValueError("markdown_text 为空")
+
+        if not doc_name:
+            doc_name = "markdown_doc"
+
+        chunks = self._split_markdown(markdown_text)
+        logging.info(f"Markdown 分块完成，共 {len(chunks)} 个块，开始存入 ES")
+        return self._index_chunks(chunks, doc_name=doc_name)
+
+    def _split_markdown(self, markdown_text, max_chunk_chars=1000):
+        """按段落与标题切分 Markdown，控制单块长度，避免超长块影响检索。"""
+        text = markdown_text.replace("\r\n", "\n").strip()
+        if not text:
+            return []
+
+        raw_blocks = [b.strip() for b in re.split(r"\n\s*\n+", text) if b.strip()]
+        chunks = []
+
+        for block in raw_blocks:
+            # 对超长段落做二次切分，优先按句号切。
+            if len(block) <= max_chunk_chars:
+                chunks.append(block)
+                continue
+
+            sentences = re.split(r"(?<=[。！？.!?])\s+", block)
+            current = ""
+            for sent in sentences:
+                sent = sent.strip()
+                if not sent:
+                    continue
+                if len(current) + len(sent) + 1 <= max_chunk_chars:
+                    current = f"{current} {sent}".strip()
+                else:
+                    if current:
+                        chunks.append(current)
+                    current = sent
+            if current:
+                chunks.append(current)
+
+        return chunks
+
+    def _index_chunks(self, chunks, doc_name):
+        """统一写入 ES，兼容字符串与 DeepDoc 的 list 块结构。"""
         doc_count = 0
-        for i, chunk in enumerate(chunks):
-            # 防御性处理 chunk 格式
+        for chunk in chunks:
             text_content = ""
             page_num = 0
-            
+
             if isinstance(chunk, str):
                 text_content = chunk
             elif isinstance(chunk, list):
-                 # deepdoc 有时返回 [text, bbox...]
-                 if len(chunk) > 0:
-                     text_content = str(chunk[0])
+                # deepdoc 有时返回 [text, bbox...]
+                if len(chunk) > 0:
+                    text_content = str(chunk[0])
             else:
                 text_content = str(chunk)
 
+            text_content = text_content.strip()
             if not text_content:
                 continue
 
@@ -120,13 +168,13 @@ class RAGAdapter:
                 "doc_name": doc_name,
                 "page_num": page_num
             }
-            
+
             try:
                 self.es.index(index=self.index_name, document=doc)
                 doc_count += 1
             except Exception as e:
                 logging.error(f"Indexing error: {e}")
-        
+
         logging.info(f"索引完成: {doc_name}, 成功插入 {doc_count} 条")
         return doc_count
 
@@ -144,7 +192,7 @@ class RAGAdapter:
             "_source": ["content", "doc_name", "page_num"]
         }
         res = self.es.search(index=self.index_name, body=body)
-        
+
         results = []
         for hit in res['hits']['hits']:
             results.append({
