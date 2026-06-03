@@ -4,7 +4,7 @@ services:
   kg-managesystem-frontend:
     build:
       context: ./kg-managesystem-master
-    container_name: kg-managesystem-frontend
+    container_name: ceramikg-frontend
     env_file:
       - ./.env
     ports:
@@ -19,7 +19,7 @@ services:
     build:
       context: .
       dockerfile: pdf-flask-handler/Dockerfile
-    container_name: pdf-flask-handler
+    container_name: ceramikg-pdf-handler
     env_file:
       - ./.env
     ports:
@@ -55,7 +55,7 @@ services:
   cig-kg-backend:
     build:
       context: ./cig-kg-backend-master
-    container_name: cig-kg-backend
+    container_name: ceramikg-backend
     env_file:
       - ./.env
     ports:
@@ -100,7 +100,7 @@ services:
         condition: service_healthy  # 等待 Neo4j 健康
   mysql:
     image: mysql:8.0
-    container_name: tobacco-mysql
+    container_name: ceramikg-mysql
     env_file:
       - ./.env
     environment:
@@ -122,7 +122,7 @@ services:
 
   mongo:
     image: mongo:6
-    container_name: tobacco-mongo
+    container_name: ceramikg-mongo
     env_file:
       - ./.env
     environment:
@@ -141,7 +141,7 @@ services:
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.4
-    container_name: tobacco-elasticsearch
+    container_name: ceramikg-elasticsearch
     env_file:
       - ./.env
     environment:
@@ -170,7 +170,7 @@ services:
   # 新增 Neo4j 服务
   neo4j:
     image: neo4j:5.19.0-community
-    container_name: tobacco-neo4j
+    container_name: ceramikg-neo4j
     env_file:
       - ./.env
     environment:

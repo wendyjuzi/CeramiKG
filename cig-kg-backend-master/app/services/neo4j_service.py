@@ -54,35 +54,39 @@ class Neo4jService:
         """创建约束和索引以提高查询性能"""
         async with self.driver.session() as session:
             try:
-                # 为实体创建唯一性约束
+                # 删除旧的全局唯一约束（如果存在）
                 await session.run("""
-                    CREATE CONSTRAINT IF NOT EXISTS FOR (e:Entity) REQUIRE e.entity_id IS UNIQUE
+                    DROP CONSTRAINT IF EXISTS FOR (e:Entity) REQUIRE e.entity_id IS UNIQUE
                 """)
                 
-                # 为实体名称创建索引
+                # 创建复合唯一约束：entity_id + document_id 组合唯一
+                await session.run("""
+                    CREATE CONSTRAINT IF NOT EXISTS FOR (e:Entity) 
+                    REQUIRE (e.entity_id, e.document_id) IS UNIQUE
+                """)
+                
+                # 其他索引保持不变
                 await session.run("""
                     CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.entity_name)
                 """)
                 
-                # 为实体类型创建索引
                 await session.run("""
                     CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.entity_type)
                 """)
                 
-                # 为文档ID创建索引（用于快速过滤）
                 await session.run("""
                     CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.document_id)
                 """)
                 
-                # 为关系创建索引
                 await session.run("""
                     CREATE INDEX IF NOT EXISTS FOR ()-[r:RELATED_TO]-() ON (r.relation_name)
                 """)
+                
                 await session.run("""
                     CREATE INDEX IF NOT EXISTS FOR ()-[r:RELATED_TO]-() ON (r.document_id)
                 """)
                 
-                logger.info("Neo4j constraints and indexes created")
+                logger.info("Neo4j constraints and indexes created successfully")
             except Exception as e:
                 logger.warning(f"Error creating constraints/indexes: {e}")
 

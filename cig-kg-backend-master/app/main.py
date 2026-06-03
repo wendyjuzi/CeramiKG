@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import graph, graph_2, document_governance
-from app.dependencies.dependencies import mongo_service, mysql_service
+from app.routes import  graph_2, document_governance
+from app.dependencies.dependencies import mongo_service_extended, mysql_service
 from app.config import settings
 from pathlib import Path
 import importlib.util
@@ -39,7 +39,7 @@ app.include_router(document_governance.router, tags=["Document Governance"])
 async def startup_event():
     """应用启动时初始化数据库连接"""
     try:
-        await mongo_service.initialize()
+        await mongo_service_extended.initialize()
         await mysql_service.initialize()
         await _run_first_time_init()
         # await neo4j_service.initialize()
@@ -85,7 +85,7 @@ async def _run_first_time_init():
 async def shutdown_event():
     """应用关闭时关闭数据库连接"""
     try:
-        await mongo_service.close()
+        await mongo_service_extended.close()
         await mysql_service.close()
         # await neo4j_service.close()
         print("Database connections closed successfully")

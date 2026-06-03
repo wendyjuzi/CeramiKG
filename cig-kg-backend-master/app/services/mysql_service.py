@@ -1504,6 +1504,17 @@ class MySQLService:
                 
                 result = await cursor.fetchone()
                 return result[0] if result else 0
+    
+    async def get_document_name_map(self) -> Dict[str, str]:
+        """获取文档ID到名称的映射"""
+        if self.pool is None:
+            await self.initialize()
+
+        async with self.pool.acquire() as conn: 
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("SELECT id, name FROM documents")
+                documents = await cursor.fetchall()  # 返回字典列表，如 [{'id': 1, 'name': 'doc1'}, ...]
+                return {str(doc['id']): doc['name'] for doc in documents}
 
     def _get_status_text(self, status: int) -> str:
         """获取状态文本"""
@@ -1513,3 +1524,5 @@ class MySQLService:
             2: "已删除"
         }
         return status_map.get(status, "未知状态")
+    
+    

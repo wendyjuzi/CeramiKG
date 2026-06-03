@@ -744,54 +744,38 @@ class PromptService:
         
         return before_match and after_match
 
-    # async def _call_llm_api(self, prompt: str) -> str:
-    #     """调用LLM API"""
-    #     try:
-    #         # 配置OpenAI客户端
-    #         client = openai.AsyncOpenAI(
-    #             api_key=settings.API_KEY,
-    #             base_url=settings.BASE_URL
-    #         )
-            
-    #         # 调用API
-    #         response = await client.chat.completions.create(
-    #             model=settings.MODEL_NAME,
-    #             messages=[
-    #                 {"role": "user", "content": prompt}
-    #             ],
-    #             temperature=0.1
-    #         )
-            
-    #         return response.choices[0].message.content.strip()
-    #     except Exception as e:
-    #         logger.error(f"LLM API调用失败: {e}")
-    #         raise
+   
     async def _call_llm_api(self, prompt: str) -> str:
-        """调用智谱API - 直接使用环境变量"""
+        """调用千问API - 直接使用环境变量"""
         try:
-            from zhipuai import ZhipuAI
             import os
+            from openai import OpenAI
             
             # 直接从环境变量获取配置
             API_KEY = os.getenv("API_KEY", "")
-            MODEL_NAME = os.getenv("MODEL_NAME", "")
-            # print(API_KEY,MODEL_NAME)
+            BASE_URL = os.getenv("BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+            MODEL_NAME = os.getenv("MODEL_NAME", "Qwen3.6-27B")
+            
             # 添加调试信息
-            logger.info(f"智谱API调用开始:")
+            logger.info(f"千问API调用开始:")
             logger.info(f"  环境变量 API_KEY: {API_KEY[:8] if API_KEY else 'None'}...")
+            logger.info(f"  环境变量 BASE_URL: {BASE_URL}")
             logger.info(f"  环境变量 MODEL_NAME: {MODEL_NAME}")
             logger.info(f"  Prompt长度: {len(prompt)}")
             
             # 检查API_KEY是否有效
             if not API_KEY:
-                logger.error("API_KEY为空！环境变量检查:")
-                logger.error(f"  os.getenv('API_KEY'): {os.getenv('API_KEY')}")
-                logger.error(f"  os.getenv('QWEN_API_KEY'): {os.getenv('QWEN_API_KEY')}")
+                logger.error("API_KEY为空！")
                 raise ValueError("API_KEY is empty")
             
-            client = ZhipuAI(api_key=API_KEY)
+            # 创建 OpenAI 客户端（千问支持 OpenAI 兼容模式）
+            client = OpenAI(
+                api_key=API_KEY,
+                base_url=BASE_URL,
+                timeout=200
+            )
             
-            # 添加超时和重试
+            # 添加重试机制
             max_retries = 3
             for attempt in range(max_retries):
                 try:
@@ -801,7 +785,7 @@ class PromptService:
                         model=MODEL_NAME,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.1,
-                        timeout=200  # 添加超时参数
+                        extra_body={"enable_search": False}  # 可选：是否启用联网搜索
                     )
                     
                     result = response.choices[0].message.content.strip()
@@ -820,11 +804,11 @@ class PromptService:
                         raise
             
         except ImportError as e:
-            logger.error(f"zhipuai模块导入失败: {e}")
+            logger.error(f"openai模块导入失败: {e}")
+            logger.error("请安装: pip install openai")
             raise
         except Exception as e:
-            logger.error(f"智谱API调用失败: {type(e).__name__}: {e}")
-            # 记录完整错误信息
+            logger.error(f"千问API调用失败: {type(e).__name__}: {e}")
             import traceback
             logger.error(f"完整错误追踪:\n{traceback.format_exc()}")
             raise

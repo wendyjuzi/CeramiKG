@@ -3,9 +3,9 @@ from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from typing import List, Optional
 import logging
-from app.dependencies.dependencies import get_mongo_service, get_mongo_service_extended, get_mysql_service, get_prompt_service, get_neo4j_service
+from app.dependencies.dependencies import get_mongo_service_extended, get_mysql_service, get_prompt_service, get_neo4j_service
 from app.utils.json_validator import JSONValidator
-from app.services.mongo_service import MongoService
+
 from app.services.mongo_service_extended import MongoServiceExtended
 from app.services.mysql_service import MySQLService
 from app.services.neo4j_service import Neo4jService
@@ -30,7 +30,6 @@ async def get_documents(
 ):
     """从 cigarette_kg.documents 获取文档列表"""
     try:
-        # 强制使用cigarette_kg.documents数据库
         documents_data = await mongo_service_extended.get_documents_from_juanyan()
         return [
             DocumentSummary(
@@ -48,7 +47,7 @@ async def get_document_detail(
     document_id: str,
     mongo_service_extended: MongoServiceExtended = Depends(get_mongo_service_extended)
 ):
-    """根据document_id获取文档详情，包含json_data字段内容 (异常12修复)"""
+    """根据document_id获取文档详情，包含json_data字段内容"""
     try:
         # 强制使用cigarette_kg.documents数据库
         doc_data = await mongo_service_extended.get_document_by_document_id(document_id)
@@ -76,7 +75,8 @@ async def get_document_detail(
             headers={"Content-Type": "application/json; charset=utf-8"}
         )
 
-# 3.2 术语库管理接口（保留MySQL）
+
+# 3.2 术语库管理接口
 
 @router.get("/terms", response_model=List[Term])
 async def get_terms(
@@ -106,7 +106,7 @@ async def get_terms(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取术语库失败: {str(e)}")
 
-# 异常41修复：术语管理接口（保留MySQL）
+# 异常41修复：术语管理接口
 @router.post("/terms", response_model=Term)
 async def create_term(
     request: TermCreateRequest,
@@ -874,13 +874,29 @@ async def list_knowledge_tables(neo4j_service: Neo4jService = Depends(get_neo4j_
         raise HTTPException(status_code=500, detail=f"获取知识表列表失败: {str(e)}")
 
 @router.get("/knowledge-graph-options", response_model=List[KnowledgeGraphOption])
-async def get_knowledge_graph_options(neo4j_service: Neo4jService = Depends(get_neo4j_service)):
+async def get_knowledge_graph_options(
+    neo4j_service: Neo4jService = Depends(get_neo4j_service),
+    mysql_service: MySQLService = Depends(get_mysql_service)
+):
     """获取知识图谱选项列表，包含显示名称和document_id"""
     try:
+        # 从 Neo4j 获取基础选项
         options = await neo4j_service.get_knowledge_graph_options()
+        
+        # 从 MySQL 获取文档名称映射
+        name_map = await mysql_service.get_document_name_map()
+        
+        # 替换显示名称
+        for option in options:
+            if option.document_id in name_map:
+                original_name = name_map[option.document_id]
+                option.display_name = original_name
+                option.description = f"基于文档 '{original_name}' 构建的知识图谱"
+        
         return options
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取知识图谱选项失败: {str(e)}")
+        logger.error(f"获取知识图谱选项失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取知识图谱选项失败: {str(e)}")        
 
 @router.delete("/knowledge-tables/{document_id}", response_model=APIResponse)
 async def delete_knowledge_table(
