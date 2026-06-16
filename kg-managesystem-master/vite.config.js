@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'node:path'
 
+const pdfProxyTarget = process.env.VITE_PDF_PROXY_TARGET || 'http://127.0.0.1:8001'
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [vue()],
@@ -14,7 +16,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: pdfProxyTarget,
         changeOrigin: true,
         secure: false,
         configure: (proxy, _options) => {
@@ -31,9 +33,10 @@ export default defineConfig({
       }
       ,
       '/pdf': {
-        target: 'http://127.0.0.1:8001',
+        target: pdfProxyTarget,
         changeOrigin: true,
         secure: false,
+        rewrite: (path) => path.replace(/^\/pdf/, ''),
       },
       '/files': {
         target: 'http://127.0.0.1:8000',

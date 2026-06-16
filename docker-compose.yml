@@ -32,6 +32,7 @@ services:
       MINERU_BACKEND: "pipeline"
       MINERU_PARSE_METHOD: "auto"
       MINERU_LANG: "ch"
+      MINERU_ENABLED: "false"
       MINERU_MODEL_SOURCE: "modelscope"
       CORS_ORIGINS: "${CORS_ORIGINS}"
       PORT: "8001"

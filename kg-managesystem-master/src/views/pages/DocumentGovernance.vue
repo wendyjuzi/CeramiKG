@@ -109,60 +109,68 @@
       </el-card>
     </div>
 
-    <!-- 下半区域：文档审核面板 (动态展示) -->
-    <div v-if="reviewPanelVisible" class="review-panel-section">
-      <el-card class="review-card" shadow="hover">
-        <template #header>
-          <div class="card-header">
-            <span>文档审核 - {{ currentDocument?.name }}</span>
-            <div class="header-actions">
-              <el-button
-                type="success"
-                :icon="Check"
-                @click="confirmChanges"
-                :disabled="!hasChanges"
-                size="small"
-              >
-                确认修改
-              </el-button>
-              
-              <el-button
-                type="warning"
-                :icon="RefreshLeft"
-                @click="undoChanges"
-                :disabled="undoStack.length === 0"
-                size="small"
-              >
-                撤销修改 ({{ undoStack.length }}/5)
-              </el-button>
-              
-              <el-button
-                type="primary"
-                :icon="Finished"
-                @click="completeReview"
-                :loading="completingReview"
-                size="small"
-              >
-                审核完毕
-              </el-button>
-
-              <el-button 
-                type="info" 
-                :icon="Close" 
-                @click="closeReviewPanel"
-                size="small"
-              >
-                关闭审核
-              </el-button>
-            </div>
+    <!-- 弹出式文档审核面板 -->
+    <el-drawer
+      v-model="reviewPanelVisible"
+      size="92%"
+      class="review-drawer"
+      :with-header="false"
+      :before-close="handleReviewBeforeClose"
+      destroy-on-close
+    >
+      <div class="review-drawer-layout">
+        <div class="review-drawer-header">
+          <div class="review-title">
+            <span>文档审核</span>
+            <strong>{{ currentDocument?.name || '-' }}</strong>
           </div>
-        </template>
+          <div class="header-actions">
+            <el-button
+              type="success"
+              :icon="Check"
+              @click="confirmChanges"
+              :disabled="!hasChanges"
+              size="small"
+            >
+              确认修改
+            </el-button>
+
+            <el-button
+              type="warning"
+              :icon="RefreshLeft"
+              @click="undoChanges"
+              :disabled="undoStack.length === 0"
+              size="small"
+            >
+              撤销修改 ({{ undoStack.length }}/5)
+            </el-button>
+
+            <el-button
+              type="primary"
+              :icon="Finished"
+              @click="completeReview"
+              :loading="completingReview"
+              size="small"
+            >
+              审核完毕
+            </el-button>
+
+            <el-button
+              type="info"
+              :icon="Close"
+              @click="closeReviewPanel"
+              size="small"
+            >
+              关闭审核
+            </el-button>
+          </div>
+        </div>
 
         <!-- 左右分栏布局 -->
         <div class="review-content">
           <!-- 左区：PDF预览 -->
           <div class="pdf-preview-section">
-            <PDFPreview 
+            <PDFPreview
               :document="currentDocument"
               :file-path="currentDocument?.pdf_path"
             />
@@ -178,8 +186,8 @@
             />
           </div>
         </div>
-      </el-card>
-    </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -285,7 +293,7 @@ const handleReview = async (row) => {
     undoStack.value = []
     reviewPanelVisible.value = true
     
-    ElMessage.success('文档审核面板已打开')
+    ElMessage.success('文档审核页面已打开')
   } catch (error) {
     console.error('获取文档审核详情失败:', error)
     ElMessage.error('获取文档审核详情失败')
@@ -320,7 +328,7 @@ const handleDelete = async (row) => {
 const closeReviewPanel = () => {
   if (hasChanges.value) {
     ElMessageBox.confirm(
-      '您有未保存的修改，确定要关闭审核面板吗？',
+      '您有未保存的修改，确定要关闭审核页面吗？',
       '确认关闭',
       {
         confirmButtonText: '确定',
@@ -329,14 +337,44 @@ const closeReviewPanel = () => {
       }
     ).then(() => {
       reviewPanelVisible.value = false
-      currentDocument.value = null
+      resetReviewState()
     }).catch(() => {
       // 取消关闭
     })
   } else {
     reviewPanelVisible.value = false
-    currentDocument.value = null
+    resetReviewState()
   }
+}
+
+const handleReviewBeforeClose = (done) => {
+  if (!hasChanges.value) {
+    resetReviewState()
+    done()
+    return
+  }
+
+  ElMessageBox.confirm(
+    '您有未保存的修改，确定要关闭审核页面吗？',
+    '确认关闭',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }
+  ).then(() => {
+    resetReviewState()
+    done()
+  }).catch(() => {
+    // 保持审核页面打开
+  })
+}
+
+const resetReviewState = () => {
+  currentDocument.value = null
+  originalJsonData.value = []
+  editingJsonData.value = []
+  undoStack.value = []
 }
 
 const handleJsonChange = (newData) => {
@@ -404,7 +442,7 @@ const completeReview = async () => {
     
     ElMessage.success('审核完成')
     reviewPanelVisible.value = false
-    currentDocument.value = null
+    resetReviewState()
     loadDocuments() // 刷新列表
     
   } catch (error) {
@@ -481,19 +519,11 @@ const formatDateTime = (dateStr) => {
   text-align: center;
 }
 
-.review-panel-section {
-  margin-top: 20px;
-}
-
-.review-card {
-  border-radius: 8px;
-}
-
 .review-content {
   display: flex;
   gap: 20px;
-  min-height: 700px;
-  height: calc(100vh - 300px); /* 使用视口高度，预留空间给上下内容 */
+  min-height: 0;
+  height: 100%;
 }
 
 .pdf-preview-section {
@@ -515,20 +545,70 @@ const formatDateTime = (dateStr) => {
   overflow: hidden;
 }
 
+:deep(.review-drawer .el-drawer__body) {
+  padding: 0;
+  background: #f5f7fa;
+}
+
+.review-drawer-layout {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.review-drawer-header {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.review-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.review-title span {
+  color: #606266;
+  font-size: 13px;
+}
+
+.review-title strong {
+  color: #303133;
+  font-size: 18px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
 /* 响应式设计 */
 @media (max-width: 1200px) {
   .review-content {
     flex-direction: column;
-    height: auto; /* 小屏幕时使用自动高度 */
-    min-height: 800px;
+    overflow: auto;
   }
   
   .pdf-preview-section,
   .json-editor-section {
     flex: none;
-    min-height: 500px; /* 增加小屏幕时的最小高度 */
-    height: auto;
+    min-height: 500px;
+  }
+
+  .review-drawer-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

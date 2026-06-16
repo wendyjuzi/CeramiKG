@@ -19,6 +19,21 @@
             </el-menu-item>
 
 
+            <el-menu-item index="/tasks" @click="handleMenuItemClick('/tasks')">
+            <el-icon><Tickets /></el-icon>
+            <span>任务管理</span>
+            </el-menu-item>
+
+            <el-menu-item index="/task-templates" @click="handleMenuItemClick('/task-templates')">
+            <el-icon><Collection /></el-icon>
+            <span>模板管理</span>
+            </el-menu-item>
+
+            <el-menu-item index="/projects" @click="handleMenuItemClick('/projects')">
+            <el-icon><Setting /></el-icon>
+            <span>项目管理</span>
+            </el-menu-item>
+
             <el-menu-item index="/build" @click="handleMenuItemClick('/build')">
             <el-icon><DocumentAdd/></el-icon>
             <span>图谱构建</span>
@@ -45,7 +60,8 @@ Setting,
 DArrowRight,
 Collection,
 Search,
-Document
+Document,
+Tickets
 } from '@element-plus/icons-vue'
 import { useRouter, useRoute } from 'vue-router'
 

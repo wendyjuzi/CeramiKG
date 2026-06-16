@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -15,11 +15,9 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debia
 
 COPY requirements.txt /app/requirements.txt
 
-# Install system build dependencies that may be required to build wheels
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libssl-dev libffi-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir -r /app/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+RUN pip install --no-cache-dir -r /app/requirements.txt \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn
 
 COPY app /app/app
 COPY scripts /app/scripts

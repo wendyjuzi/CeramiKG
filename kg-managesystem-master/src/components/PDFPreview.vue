@@ -201,27 +201,9 @@ const pdfUrl = computed(() => {
   // 生产环境推荐留空走同源；需要时可通过 VITE_API_BASE_URL 覆盖
   const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
   
-  let baseUrlWithoutParams = ''
-  
-  // 处理绝对路径（Windows: C:\ 或 Unix: /）
-  if (props.filePath.match(/^[a-zA-Z]:|^\//)) {
-    // 通过后端API访问绝对路径文件，使用改进的中文路径编码
-    const encodedPath = encodeChinesePath(props.filePath)
-    baseUrlWithoutParams = `${baseUrl}/api/document-governance/files/pdf?path=${encodedPath}`
-    
-    console.log('构建的PDF URL (绝对路径):', baseUrlWithoutParams)
-  } else if (props.filePath.startsWith('/')) {
-    // 如果是相对路径，对路径进行编码后构建完整URL
-    const encodedPath = encodeChinesePath(props.filePath)
-    baseUrlWithoutParams = `${baseUrl}/files${encodedPath}`
-    
-    console.log('构建的PDF URL (相对路径):', baseUrlWithoutParams)
-  } else {
-    // 如果已经是完整URL，直接使用（但仍需要编码查询参数）
-    baseUrlWithoutParams = props.filePath
-    
-    console.log('使用完整URL:', baseUrlWithoutParams)
-  }
+  const encodedPath = encodeChinesePath(props.filePath)
+  const baseUrlWithoutParams = `${baseUrl}/api/document-governance/files/pdf?path=${encodedPath}`
+  console.log('构建的PDF URL:', baseUrlWithoutParams)
   
   // 添加PDF查看器参数，包括页码控制
   const pdfParams = [

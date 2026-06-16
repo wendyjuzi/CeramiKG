@@ -33,6 +33,21 @@ const routes = [
         path: '/document-governance',
         name: 'DocumentGovernance',
         component: () => import('../views/pages/DocumentGovernance.vue')
+    },
+    {
+        path: '/tasks',
+        name: 'TaskManagement',
+        component: () => import('../views/pages/TaskManagement.vue')
+    },
+    {
+        path: '/task-templates',
+        name: 'TaskTemplateManagement',
+        component: () => import('../views/pages/TaskTemplateManagement.vue')
+    },
+    {
+        path: '/projects',
+        name: 'ProjectManagement',
+        component: () => import('../views/pages/ProjectManagement.vue')
     }
 ]
 
