@@ -72,7 +72,8 @@ class RAGAdapter:
         使用 DeepDoc 解析 PDF 并存入 ES
         """
         if not self.parser:
-            raise ImportError("RAGFlowPdfParser 未初始化")
+            logging.warning("RAGFlowPdfParser 未初始化，跳过 DeepDoc 解析: %s", file_path)
+            return 0
 
         if not doc_name:
             doc_name = os.path.basename(file_path)

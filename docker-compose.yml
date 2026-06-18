@@ -1,5 +1,4 @@
-version: "3.9"
-
+﻿
 services:
   kg-managesystem-frontend:
     build:
@@ -76,7 +75,7 @@ services:
       QWEN_API_BASE: "${QWEN_API_BASE}"
       MODEL_NAME: "${MODEL_NAME}"
       FILE_BASE_PATH: "/app/uploads"
-      # Neo4j 配置 - 使用服务名 neo4j 和内部端口 7687
+      # Neo4j 閰嶇疆 - 浣跨敤鏈嶅姟鍚?neo4j 鍜屽唴閮ㄧ鍙?7687
       NEO4J_URI: "bolt://neo4j:7687"
       NEO4J_USER: "${NEO4J_USER:-neo4j}"
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-password}"
@@ -98,7 +97,7 @@ services:
       elasticsearch:
         condition: service_healthy
       neo4j:
-        condition: service_healthy  # 等待 Neo4j 健康
+        condition: service_healthy  # 绛夊緟 Neo4j 鍋ュ悍
   mysql:
     image: mysql:8.0
     container_name: ceramikg-mysql
@@ -110,7 +109,7 @@ services:
       MYSQL_CHARSET: "utf8mb4"
       MYSQL_COLLATION: "utf8mb4_unicode_ci"
     ports:
-      - "${MYSQL_PORT}:3306"
+      - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./mysql-init:/docker-entrypoint-initdb.d:ro
@@ -168,35 +167,35 @@ services:
       timeout: 10s
       retries: 5
       start_period: 40s
-  # 新增 Neo4j 服务
+  # 鏂板 Neo4j 鏈嶅姟
   neo4j:
     image: neo4j:5.19.0-community
     container_name: ceramikg-neo4j
     env_file:
       - ./.env
     environment:
-      # 认证配置
+      # 璁よ瘉閰嶇疆
       - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-password}
-      # 内存配置
+      # 鍐呭瓨閰嶇疆
       - NEO4J_server_memory_pagecache_size=${NEO4J_PAGECACHE_SIZE:-512M}
       - NEO4J_server_memory_heap_initial__size=${NEO4J_HEAP_INITIAL:-512M}
       - NEO4J_server_memory_heap_max__size=${NEO4J_HEAP_MAX:-1G}
-      # 🔥 关键：禁用严格验证（避免配置错误）
+      # 馃敟 鍏抽敭锛氱鐢ㄤ弗鏍奸獙璇侊紙閬垮厤閰嶇疆閿欒锛?
       - NEO4J_server_config_strict__validation_enabled=false
-      # 允许所有 IP 连接
+      # 鍏佽鎵€鏈?IP 杩炴帴
       - NEO4J_server_bolt_listen__address=0.0.0.0:7687
       - NEO4J_server_http_listen__address=0.0.0.0:7474
     ports:
-      # 使用不同的主机端口避免与现有 neo4j-enterprise 冲突
-      - "${NEO4J_HTTP_PORT:-7475}:7474"   # 主机端口 7475，容器内部 7474
-      - "${NEO4J_BOLT_PORT:-7689}:7687"   # 主机端口 7689，容器内部 7687
+      # 浣跨敤涓嶅悓鐨勪富鏈虹鍙ｉ伩鍏嶄笌鐜版湁 neo4j-enterprise 鍐茬獊
+      - "${NEO4J_HTTP_PORT:-7475}:7474"   # 涓绘満绔彛 7475锛屽鍣ㄥ唴閮?7474
+      - "${NEO4J_BOLT_PORT:-7689}:7687"   # 涓绘満绔彛 7689锛屽鍣ㄥ唴閮?7687
     volumes:
-      # 使用独立的卷，避免数据混乱
+      # 浣跨敤鐙珛鐨勫嵎锛岄伩鍏嶆暟鎹贩涔?
       - neo4j_data:/data
       - neo4j_logs:/logs
       - neo4j_import:/import
-      # 不挂载 conf 目录，使用容器默认配置
-    # 健康检查
+      # 涓嶆寕杞?conf 鐩綍锛屼娇鐢ㄥ鍣ㄩ粯璁ら厤缃?
+    # 鍋ュ悍妫€鏌?
     healthcheck:
       test: ["CMD-SHELL", "neo4j status || exit 1"]
       interval: 30s
@@ -208,7 +207,7 @@ volumes:
   mysql_data:
   mongo_data:
   es_data:
-  # 新增 Neo4j 数据卷
+  # 鏂板 Neo4j 鏁版嵁鍗?
   neo4j_data:
   neo4j_logs:
   neo4j_import:

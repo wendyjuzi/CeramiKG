@@ -193,6 +193,13 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
 db = SQLAlchemy(app)
 
+# 库类型映射 — 必须在 init_upload_dirs 之前定义
+LIBRARY_TYPE_MAP = {
+    'maintenance': '维修库',
+    'experience': '经验库',
+    'operation': '操作库'
+}
+
 # --- 初始化函数 ---
 def init_upload_dirs():
     """确保上传目录及各库子目录存在"""
@@ -425,6 +432,7 @@ class UserLog(db.Model):
 LIBRARY_TYPE_MAP = {
     'ceramic_papers': '陶瓷文献库'
 }
+
 
 # --- 新增：生成唯一索引码的工具函数 ---
 

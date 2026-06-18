@@ -12,3 +12,6 @@ cryptography==43.0.1  # 连接 MySQL 8.0 容器必须包含此库，用于身份
 
 # 搜索引擎（保持 8.x 即可，代码中已有版本兼容处理）
 elasticsearch==8.15.1
+
+# LLM API 调用
+openai>=1.0.0

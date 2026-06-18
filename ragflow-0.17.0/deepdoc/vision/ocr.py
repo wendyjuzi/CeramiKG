@@ -1,4 +1,4 @@
-#
+﻿#
 #  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
@@ -527,7 +527,7 @@ class OCR(object):
                 self.text_detector = TextDetector(model_dir)
                 self.text_recognizer = TextRecognizer(model_dir)
             except Exception:
-                model_dir = snapshot_download(repo_id="InfiniFlow/deepdoc",
+                model_dir = snapshot_download(repo_id="InfiniFlow/deepdoc", endpoint="https://hf-mirror.com",
                                               local_dir=os.path.join(get_project_base_directory(), "rag/res/deepdoc"),
                                               local_dir_use_symlinks=False)
                 self.text_detector = TextDetector(model_dir)
