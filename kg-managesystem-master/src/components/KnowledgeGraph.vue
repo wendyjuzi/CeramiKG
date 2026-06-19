@@ -12,6 +12,21 @@
           <el-icon><Refresh /></el-icon>
           加载图谱
         </el-button>
+        <el-button
+          :loading="scanLoading"
+          @click="scanExtractedResults"
+        >
+          <el-icon><Search /></el-icon>
+          扫描抽取结果
+        </el-button>
+        <el-button
+          type="success"
+          :loading="importLoading"
+          @click="importExtractedResults"
+        >
+          <el-icon><Upload /></el-icon>
+          导入抽取结果
+        </el-button>
         <el-button 
           v-if="graphData && graphData.nodes.length > 0"
           @click="exportGraph"
@@ -31,9 +46,10 @@
             <el-select
               v-model="selectedDocumentOption"
               placeholder="选择要查看的知识图谱"
-              style="width: 200px"
+              style="width: 320px"
               @change="handleDocumentChange"
               clearable
+              filterable
             >
               <el-option
                 key="all-knowledge"
@@ -91,6 +107,75 @@
               启用缩放
             </el-checkbox>
           </div>
+        </div>
+
+        <div class="control-row import-control-row">
+          <div class="control-item import-path">
+            <label>抽取目录：</label>
+            <el-input
+              v-model="importRootPath"
+              placeholder="relation"
+              clearable
+            />
+          </div>
+          <div class="control-item">
+            <el-checkbox v-model="clearExistingOnImport">
+              导入前清空旧抽取图谱
+            </el-checkbox>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <div class="control-item" v-if="selectedDocumentOption === 'all-knowledge'">
+            <label>全局样本边数：</label>
+            <el-input-number
+              v-model="globalGraphLimit"
+              :min="100"
+              :max="10000"
+              :step="100"
+              controls-position="right"
+              :disabled="includeAllGraphData"
+              @change="loadKnowledgeGraph"
+            />
+          </div>
+          <div class="control-item" v-if="selectedDocumentOption === 'all-knowledge'">
+            <el-checkbox v-model="includeAllGraphData" @change="loadKnowledgeGraph">
+              展示全部数据
+            </el-checkbox>
+          </div>
+          <el-alert
+            v-if="graphData?.metadata?.truncated"
+            class="graph-alert"
+            type="warning"
+            :closable="false"
+            show-icon
+          >
+            <template #title>
+              当前显示 {{ graphData.metadata.total_edges }} / {{ graphData.metadata.total_relations }} 条关系，用于避免浏览器渲染过载。
+            </template>
+          </el-alert>
+          <el-alert
+            v-if="scanSummary"
+            class="graph-alert"
+            type="info"
+            :closable="false"
+            show-icon
+          >
+            <template #title>
+              扫描到 {{ scanSummary.parsed_file_count }} 篇，{{ scanSummary.total_entities }} 个实体，{{ scanSummary.total_relations }} 条关系
+            </template>
+          </el-alert>
+          <el-alert
+            v-if="importSummary"
+            class="graph-alert"
+            type="success"
+            :closable="false"
+            show-icon
+          >
+            <template #title>
+              已导入 {{ importSummary.imported_papers }} 篇，{{ importSummary.imported_entities }} 个实体，{{ importSummary.imported_relations }} 条关系
+            </template>
+          </el-alert>
         </div>
       </el-card>
     </div>
@@ -212,6 +297,12 @@
           <el-descriptions-item label="描述" v-if="selectedNode.description">
             {{ selectedNode.description }}
           </el-descriptions-item>
+          <el-descriptions-item label="上下文" v-if="selectedNode.properties?.context">
+            {{ selectedNode.properties.context }}
+          </el-descriptions-item>
+          <el-descriptions-item label="属性" v-if="formatProperties(selectedNode.properties?.attributes)">
+            <pre class="property-json">{{ formatProperties(selectedNode.properties.attributes) }}</pre>
+          </el-descriptions-item>
         </el-descriptions>
         
         <!-- 相邻节点 -->
@@ -237,6 +328,7 @@
             <el-table-column prop="source" label="源" width="80" />
             <el-table-column prop="relation" label="关系" width="80" />
             <el-table-column prop="target" label="目标" width="80" />
+            <el-table-column prop="evidence" label="证据" min-width="160" show-overflow-tooltip />
           </el-table>
         </div>
       </div>
@@ -250,14 +342,16 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import * as d3 from 'd3'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import { Refresh, Download, Share } from '@element-plus/icons-vue'
+import { Refresh, Download, Share, Search, Upload } from '@element-plus/icons-vue'
 
 export default {
   name: 'KnowledgeGraph',
   components: {
     Refresh,
     Download,
-    Share
+    Share,
+    Search,
+    Upload
   },
   props: {
     documentId: {
@@ -285,9 +379,22 @@ export default {
     const showEdgeLabels = ref(false)
     const enableZoom = ref(true)
     const graphHeight = ref(600)
+    const globalGraphLimit = ref(2000)
+    const includeAllGraphData = ref(false)
+    const importRootPath = ref('relation')
+    const clearExistingOnImport = ref(true)
+    const scanLoading = ref(false)
+    const importLoading = ref(false)
+    const scanSummary = ref(null)
+    const importSummary = ref(null)
 
     // D3相关变量
     let svg, simulation, nodes, links, nodeElements, linkElements, labelElements, nodeGroups
+    const resizeHandler = () => {
+      if (graphData.value) {
+        renderGraph()
+      }
+    }
     
     // API基础URL
     const API_BASE_URL = '/api/graph'
@@ -375,7 +482,8 @@ export default {
           result.push({
             source: sourceName,
             relation: edge.relation_type || edge.type,
-            target: targetName
+            target: targetName,
+            evidence: edge.properties?.evidence || edge.properties?.evidence_text || ''
           })
         }
       })
@@ -410,6 +518,56 @@ export default {
       }
     }
 
+    const getImportRootPath = () => {
+      const rootPath = importRootPath.value.trim()
+      return rootPath || undefined
+    }
+
+    const scanExtractedResults = async () => {
+      scanLoading.value = true
+      try {
+        const rootPath = getImportRootPath()
+        const response = await axios.get(`${API_BASE_URL}/extracted-results/scan`, {
+          params: rootPath ? { root_path: rootPath } : {}
+        })
+        scanSummary.value = response.data
+        ElMessage.success(`扫描完成：${response.data.parsed_file_count} 篇，${response.data.total_relations} 条关系`)
+      } catch (error) {
+        console.error('扫描抽取结果失败:', error)
+        ElMessage.error('扫描抽取结果失败: ' + (error.response?.data?.detail || error.message))
+      } finally {
+        scanLoading.value = false
+      }
+    }
+
+    const importExtractedResults = async () => {
+      importLoading.value = true
+      try {
+        const rootPath = getImportRootPath()
+        const response = await axios.post(`${API_BASE_URL}/extracted-results/import`, {
+          root_path: rootPath || null,
+          clear_existing: clearExistingOnImport.value
+        })
+        importSummary.value = response.data?.data || null
+        const errors = importSummary.value?.errors || []
+
+        await loadKnowledgeTables()
+        selectedDocumentOption.value = 'all-knowledge'
+        await loadKnowledgeGraph()
+
+        if (errors.length > 0) {
+          ElMessage.warning(`导入完成，但有 ${errors.length} 个文件失败，请查看后端日志`)
+        } else {
+          ElMessage.success(`导入完成：${importSummary.value?.imported_papers || 0} 篇，${importSummary.value?.imported_relations || 0} 条关系`)
+        }
+      } catch (error) {
+        console.error('导入抽取结果失败:', error)
+        ElMessage.error('导入抽取结果失败: ' + (error.response?.data?.detail || error.message))
+      } finally {
+        importLoading.value = false
+      }
+    }
+
     // 加载知识图谱数据
     const loadKnowledgeGraph = async () => {
       if (!selectedDocumentOption.value) {
@@ -424,7 +582,12 @@ export default {
         // 根据选择调用不同的API
         if (selectedDocumentOption.value === 'all-knowledge') {
           // 加载所有知识图谱
-          response = await axios.get(`${API_BASE_URL}/unified-knowledge-graph`)
+          response = await axios.get(`${API_BASE_URL}/unified-knowledge-graph`, {
+            params: {
+              limit: globalGraphLimit.value,
+              include_all: includeAllGraphData.value
+            }
+          })
         } else {
           // 加载特定文档的知识图谱
           response = await axios.get(`${API_BASE_URL}/knowledge-graph/${selectedDocumentOption.value}`)
@@ -432,12 +595,26 @@ export default {
 
         if (response.data && response.data.nodes && response.data.edges) {
           graphData.value = response.data
+          graphData.value.nodes = graphData.value.nodes.map(node => ({
+            ...node,
+            description: node.description || node.properties?.context || ''
+          }))
+          graphData.value.edges = graphData.value.edges.map(edge => ({
+            ...edge,
+            confidence: edge.confidence ?? edge.properties?.confidence ?? 1,
+            evidence: edge.evidence || edge.properties?.evidence || edge.properties?.evidence_text || ''
+          }))
 
           // 计算节点度数
+          const degreeMap = {}
+          graphData.value.edges.forEach(edge => {
+            const sourceId = typeof edge.source === 'object' ? edge.source.id : edge.source
+            const targetId = typeof edge.target === 'object' ? edge.target.id : edge.target
+            degreeMap[sourceId] = (degreeMap[sourceId] || 0) + 1
+            degreeMap[targetId] = (degreeMap[targetId] || 0) + 1
+          })
           graphData.value.nodes.forEach(node => {
-            node.degree = graphData.value.edges.filter(
-              edge => edge.source === node.id || edge.target === node.id
-            ).length
+            node.degree = degreeMap[node.id] || 0
           })
 
           await nextTick()
@@ -451,7 +628,9 @@ export default {
             const selectedOption = knowledgeTables.value.find(opt => opt.document_id === selectedDocumentOption.value)
             selectedTypeName = selectedOption ? selectedOption.display_name : selectedDocumentOption.value
           }
-          ElMessage.success(`成功加载${selectedTypeName}图谱：${graphData.value.nodes.length} 个节点，${graphData.value.edges.length} 条边`)
+          const truncatedText = graphData.value.metadata?.truncated ? '（全局样本）' : ''
+          const fullText = graphData.value.metadata?.include_all ? '（全部数据）' : ''
+          ElMessage.success(`成功加载${selectedTypeName}图谱${truncatedText}${fullText}：${graphData.value.nodes.length} 个节点，${graphData.value.edges.length} 条边`)
         } else {
           graphData.value = null
           ElMessage.warning('知识图谱数据格式异常')
@@ -602,11 +781,7 @@ export default {
         .attr('r', d => {
           // 根据节点度数调整大小
           const basSize = nodeSize.value
-          const degree = graphData.value.edges.filter(edge => {
-            const sourceId = typeof edge.source === 'object' ? edge.source.id : edge.source
-            const targetId = typeof edge.target === 'object' ? edge.target.id : edge.target
-            return sourceId === d.id || targetId === d.id
-          }).length
+          const degree = d.degree || 0
           return Math.max(basSize * 0.7, Math.min(basSize * 1.8, basSize + degree * 2))
         })
         .attr('fill', d => {
@@ -634,11 +809,7 @@ export default {
             .duration(200)
             .attr('r', d => {
               const basSize = nodeSize.value
-              const degree = graphData.value.edges.filter(edge => {
-                const sourceId = typeof edge.source === 'object' ? edge.source.id : edge.source
-                const targetId = typeof edge.target === 'object' ? edge.target.id : edge.target
-                return sourceId === d.id || targetId === d.id
-              }).length
+              const degree = d.degree || 0
               return Math.max(basSize * 0.7, Math.min(basSize * 1.8, basSize + degree * 2)) * 1.2
             })
             .attr('stroke-width', 4)
@@ -652,11 +823,7 @@ export default {
             .duration(200)
             .attr('r', d => {
               const basSize = nodeSize.value
-              const degree = graphData.value.edges.filter(edge => {
-                const sourceId = typeof edge.source === 'object' ? edge.source.id : edge.source
-                const targetId = typeof edge.target === 'object' ? edge.target.id : edge.target
-                return sourceId === d.id || targetId === d.id
-              }).length
+              const degree = d.degree || 0
               return Math.max(basSize * 0.7, Math.min(basSize * 1.8, basSize + degree * 2))
             })
             .attr('stroke-width', 3)
@@ -712,11 +879,7 @@ export default {
           .attr('x', d => d.x)
           .attr('y', d => {
             // 根据节点实际大小调整标签位置
-            const degree = graphData.value.edges.filter(edge => {
-              const sourceId = typeof edge.source === 'object' ? edge.source.id : edge.source
-              const targetId = typeof edge.target === 'object' ? edge.target.id : edge.target
-              return sourceId === d.id || targetId === d.id
-            }).length
+            const degree = d.degree || 0
             const radius = Math.max(nodeSize.value * 0.7, Math.min(nodeSize.value * 1.8, nodeSize.value + degree * 2))
             return d.y + radius + 15
           })
@@ -941,6 +1104,15 @@ export default {
       return edgeColorScale(type)
     }
 
+    const formatProperties = (value) => {
+      if (!value || (typeof value === 'object' && Object.keys(value).length === 0)) return ''
+      try {
+        return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+      } catch (error) {
+        return String(value)
+      }
+    }
+
     // 异常25修复：添加tooltip功能
     let tooltip = null
     
@@ -960,11 +1132,7 @@ export default {
       }
       
       // 计算节点度数
-      const degree = graphData.value.edges.filter(edge => {
-        const sourceId = typeof edge.source === 'object' ? edge.source.id : edge.source
-        const targetId = typeof edge.target === 'object' ? edge.target.id : edge.target
-        return sourceId === d.id || targetId === d.id
-      }).length
+      const degree = d.degree || 0
       
       tooltip
         .style('visibility', 'visible')
@@ -973,6 +1141,7 @@ export default {
           <div>类型: ${d.type}</div>
           <div>连接数: ${degree}</div>
           ${d.description ? `<div>描述: ${d.description}</div>` : ''}
+          ${d.properties?.context ? `<div>上下文: ${d.properties.context}</div>` : ''}
           ${d.confidence ? `<div>置信度: ${(d.confidence * 100).toFixed(1)}%</div>` : ''}
         `)
         .style('left', (event.pageX + 10) + 'px')
@@ -988,13 +1157,6 @@ export default {
     // 生命周期
     onMounted(() => {
       loadKnowledgeTables()
-      
-      // 监听窗口大小变化
-      const resizeHandler = () => {
-        if (graphData.value) {
-          renderGraph()
-        }
-      }
       window.addEventListener('resize', resizeHandler)
     })
 
@@ -1019,6 +1181,14 @@ export default {
       showEdgeLabels,
       enableZoom,
       graphHeight,
+      globalGraphLimit,
+      includeAllGraphData,
+      importRootPath,
+      clearExistingOnImport,
+      scanLoading,
+      importLoading,
+      scanSummary,
+      importSummary,
       nodeTypes,
       edgeTypes,
       neighbors,
@@ -1026,6 +1196,8 @@ export default {
       documentNameModel,
       loadKnowledgeTables,
       loadKnowledgeGraph,
+      scanExtractedResults,
+      importExtractedResults,
       handleDocumentChange,
       updateLayout,
       updateNodeSize,
@@ -1035,7 +1207,8 @@ export default {
       exportGraph,
       highlightNode,
       getNodeColor,
-      getEdgeColor
+      getEdgeColor,
+      formatProperties
     }
   }
 }
@@ -1084,6 +1257,18 @@ export default {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.import-path {
+  min-width: 320px;
+}
+
+.import-path .el-input {
+  width: 240px;
+}
+
+.graph-alert {
+  max-width: 680px;
 }
 
 .control-item label {
@@ -1204,6 +1389,15 @@ export default {
 
 .node-detail {
   padding: 16px 0;
+}
+
+.property-json {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #606266;
 }
 
 .neighbors-section,
