@@ -44,6 +44,7 @@ class AssistantServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[图谱1]", result.answer)
         self.assertEqual(result.metadata["generated_by"], "retrieval")
         self.assertEqual(result.metadata["document_ids"], ["12"])
+        self.assertEqual(result.metadata["document_names"], [])
         self.assertEqual(result.graph_evidence[0].paper_title, "氧化铝陶瓷烧结研究")
         self.assertEqual(result.sources[0].title, "氧化铝陶瓷烧结研究")
         self.assertEqual(result.sources[0].document_id, 42)
@@ -84,6 +85,19 @@ class Neo4jAssistantSearchTermTests(unittest.TestCase):
         self.assertIn("烧结", terms)
         self.assertLessEqual(len(terms), 24)
         self.assertNotIn("哪些", terms)
+
+
+class AssistantLiteratureScopeTests(unittest.TestCase):
+    def test_scope_uses_catalog_file_name_for_rag_filter(self):
+        names = AssistantService._document_names_for_retrieval(
+            ["氧化铝陶瓷烧结研究", "未登记文献"],
+            [{
+                "document_name": "氧化铝陶瓷烧结研究",
+                "file_name": "alumina_sintering.pdf",
+            }],
+        )
+
+        self.assertEqual(names, ["alumina_sintering.pdf", "未登记文献"])
 
 
 if __name__ == "__main__":

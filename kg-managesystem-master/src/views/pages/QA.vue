@@ -52,7 +52,7 @@
             collapse-tags-tooltip
             filterable
             :loading="scopeLoading"
-            placeholder="全部已导入图谱"
+            placeholder="全部文献与图谱"
           >
             <el-option
               v-for="scope in graphScopes"
@@ -359,12 +359,21 @@ const selectedDocumentIds = computed({
 
 const selectedScopeLabel = computed(() => {
   const ids = selectedDocumentIds.value
-  if (!ids.length) return '全部图谱'
+  if (!ids.length) return '全部文献与图谱'
   const names = graphScopes.value
     .filter(scope => ids.includes(scope.document_id))
     .map(scope => scope.display_name)
   if (names.length === 1) return names[0]
   return `${names.length || ids.length} 篇图谱`
+})
+
+const selectedDocumentNames = computed(() => {
+  const ids = selectedDocumentIds.value
+  if (!ids.length) return []
+  return graphScopes.value
+    .filter(scope => ids.includes(scope.document_id))
+    .map(scope => scope.display_name)
+    .filter(Boolean)
 })
 
 const selectedEvidenceMessage = computed(() => (
@@ -450,6 +459,7 @@ async function sendMessage() {
       history,
       mode: mode.value,
       document_ids: selectedDocumentIds.value,
+      document_names: selectedDocumentNames.value,
       top_k: 5,
       graph_limit: 8
     })

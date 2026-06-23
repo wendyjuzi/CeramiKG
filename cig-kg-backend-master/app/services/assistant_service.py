@@ -74,19 +74,36 @@ class AssistantService:
                 "literature_count": len(sources),
                 "graph_count": len(graph_evidence),
                 "document_ids": request.document_ids,
+                "document_names": request.document_names,
                 "generated_by": generated_by,
                 "model": settings.MODEL_NAME if generated_by == "llm" else None,
             },
         )
 
     async def _retrieve_literature(self, request: AssistantChatRequest) -> List[Dict]:
-        payload = {
-            "question": request.question,
-            "top_k": request.top_k,
-            "document_names": request.document_names,
-        }
+        requested_names = list(dict.fromkeys(
+            str(name or "").strip()
+            for name in request.document_names
+            if str(name or "").strip()
+        ))[:20]
         timeout = httpx.Timeout(settings.RAG_REQUEST_TIMEOUT)
         async with httpx.AsyncClient(timeout=timeout) as client:
+            retrieval_names = requested_names
+            if requested_names:
+                try:
+                    scoped_documents = await self._resolve_documents(client, requested_names)
+                    retrieval_names = self._document_names_for_retrieval(
+                        requested_names,
+                        scoped_documents,
+                    )
+                except Exception as exc:
+                    logger.info("Assistant scope document resolution skipped: %s", exc)
+
+            payload = {
+                "question": request.question,
+                "top_k": request.top_k,
+                "document_names": retrieval_names,
+            }
             response = await client.post(
                 f"{settings.RAG_SERVICE_URL.rstrip('/')}/rag/search",
                 json=payload,
@@ -104,12 +121,7 @@ class AssistantService:
                 return chunks
 
             try:
-                resolved_response = await client.post(
-                    f"{settings.RAG_SERVICE_URL.rstrip('/')}/files/resolve",
-                    json={"document_names": document_names},
-                )
-                resolved_response.raise_for_status()
-                resolved_documents = resolved_response.json().get("data", {}).get("documents", [])
+                resolved_documents = await self._resolve_documents(client, document_names)
                 resolved_by_name = {
                     str(item.get("document_name") or "").strip(): item
                     for item in resolved_documents
@@ -126,6 +138,35 @@ class AssistantService:
                 logger.info("Assistant document resolution skipped: %s", exc)
 
             return chunks
+
+    async def _resolve_documents(self, client: httpx.AsyncClient, document_names: List[str]) -> List[Dict]:
+        response = await client.post(
+            f"{settings.RAG_SERVICE_URL.rstrip('/')}/files/resolve",
+            json={"document_names": document_names},
+        )
+        response.raise_for_status()
+        documents = response.json().get("data", {}).get("documents", [])
+        return documents if isinstance(documents, list) else []
+
+    @staticmethod
+    def _document_names_for_retrieval(
+        requested_names: List[str],
+        resolved_documents: List[Dict],
+    ) -> List[str]:
+        resolved_by_request = {
+            str(item.get("document_name") or "").strip().casefold(): str(item.get("file_name") or "").strip()
+            for item in resolved_documents
+            if str(item.get("document_name") or "").strip() and str(item.get("file_name") or "").strip()
+        }
+        names = []
+        seen = set()
+        for requested_name in requested_names:
+            resolved_name = resolved_by_request.get(requested_name.casefold()) or requested_name
+            normalized_name = resolved_name.casefold()
+            if normalized_name and normalized_name not in seen:
+                seen.add(normalized_name)
+                names.append(resolved_name)
+        return names
 
     async def _retrieve_graph(self, request: AssistantChatRequest) -> List[Dict]:
         if self.neo4j_service.driver is None:

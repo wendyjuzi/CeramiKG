@@ -1428,6 +1428,7 @@ def resolve_files():
             resolved.append({
                 'document_name': document_name,
                 'document_id': document.id,
+                'file_name': document.name,
                 'display_title': document.display_title or document.name,
                 'repository': repository,
                 'preview_path': f'/files/{repository}/{document.id}/preview',
