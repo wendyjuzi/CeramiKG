@@ -1,135 +1,925 @@
 <template>
-  <div class="build-container" @click="scrollToTop">
-    <!-- 增大后的容器：作为遮蔽层和iframe的定位父容器 -->
-    <div class="fixed-container">
-      <!-- 新增字幕的遮蔽层（核心修改：添加文字内容） -->
-      <div class="ragflow-mask">
-        <span class="mask-title">智能体知识问答</span>
+  <div class="assistant-page">
+    <aside class="session-panel">
+      <div class="session-header">
+        <span>对话记录</span>
+        <el-tooltip content="新建对话" placement="top">
+          <el-button :icon="Plus" circle text @click="createSession" />
+        </el-tooltip>
       </div>
-      <!-- 原有iframe：嵌入RAGFlow页面 -->
-      <iframe
-          ref="ragflowIframe"
-          class="ragflow-iframe"
-          src="http://localhost:80/chat"
-          frameborder="0"
-          title="RAGFlow 知识问答平台"
-      ></iframe>
-    </div>
+
+      <div class="session-list">
+        <button
+          v-for="session in sessions"
+          :key="session.id"
+          class="session-item"
+          :class="{ active: session.id === activeSessionId }"
+          @click="activeSessionId = session.id"
+        >
+          <ChatDotRound class="session-icon" />
+          <span class="session-copy">
+            <span class="session-title">{{ session.title }}</span>
+            <span class="session-time">{{ formatTime(session.updatedAt) }}</span>
+          </span>
+          <el-button
+            class="session-delete"
+            :icon="Delete"
+            circle
+            text
+            @click.stop="removeSession(session.id)"
+          />
+        </button>
+      </div>
+    </aside>
+
+    <section class="assistant-workspace">
+      <header class="workspace-header">
+        <div>
+          <h1>智能交互</h1>
+          <div class="service-status">
+            <span><i class="status-dot literature"></i>文献检索</span>
+            <span><i class="status-dot graph"></i>知识图谱</span>
+            <span><i class="status-dot model"></i>大模型</span>
+          </div>
+        </div>
+
+        <el-radio-group v-model="mode" size="small">
+          <el-radio-button label="hybrid">综合</el-radio-button>
+          <el-radio-button label="literature">文献</el-radio-button>
+          <el-radio-button label="graph">图谱</el-radio-button>
+        </el-radio-group>
+      </header>
+
+      <div class="workspace-body">
+        <main class="chat-panel">
+          <div ref="messageListRef" class="message-list">
+            <div v-if="messages.length === 0" class="empty-state">
+              <div class="assistant-mark"><Search /></div>
+              <h2>从陶瓷材料知识中寻找答案</h2>
+              <div class="prompt-grid">
+                <button v-for="prompt in starterPrompts" :key="prompt" @click="usePrompt(prompt)">
+                  {{ prompt }}
+                </button>
+              </div>
+            </div>
+
+            <article
+              v-for="message in messages"
+              :key="message.id"
+              class="message-row"
+              :class="message.role"
+              @click="selectEvidence(message)"
+            >
+              <div class="message-avatar">
+                <User v-if="message.role === 'user'" />
+                <ChatDotRound v-else />
+              </div>
+              <div class="message-content">
+                <div class="message-bubble">{{ message.content }}</div>
+
+                <div v-if="message.warnings?.length" class="warning-list">
+                  <span v-for="warning in message.warnings" :key="warning">{{ warning }}</span>
+                </div>
+
+                <div v-if="message.role === 'assistant'" class="message-meta">
+                  <button v-if="message.sources?.length" @click.stop="openEvidence(message, 'literature')">
+                    <Document />{{ message.sources.length }} 篇文献
+                  </button>
+                  <button v-if="message.graphEvidence?.length" @click.stop="openEvidence(message, 'graph')">
+                    <Connection />{{ message.graphEvidence.length }} 条关系
+                  </button>
+                  <span>{{ message.metadata?.generated_by === 'llm' ? message.metadata?.model : '检索结果' }}</span>
+                </div>
+
+                <div
+                  v-if="message.role === 'assistant' && isLatestAssistant(message) && message.suggestedQuestions?.length"
+                  class="suggestions"
+                >
+                  <button
+                    v-for="suggestion in message.suggestedQuestions"
+                    :key="suggestion"
+                    @click.stop="usePrompt(suggestion)"
+                  >
+                    {{ suggestion }}
+                  </button>
+                </div>
+              </div>
+            </article>
+
+            <article v-if="sending" class="message-row assistant">
+              <div class="message-avatar"><ChatDotRound /></div>
+              <div class="message-content">
+                <div class="message-bubble thinking">
+                  <span></span><span></span><span></span>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div class="composer">
+            <el-input
+              v-model="draft"
+              type="textarea"
+              resize="none"
+              :rows="3"
+              maxlength="2000"
+              placeholder="输入关于陶瓷材料、工艺或文献的问题"
+              @keydown="handleComposerKeydown"
+            />
+            <div class="composer-footer">
+              <span>Enter 发送，Shift + Enter 换行</span>
+              <el-tooltip content="发送问题" placement="top">
+                <el-button
+                  type="primary"
+                  :icon="Promotion"
+                  circle
+                  :loading="sending"
+                  :disabled="!draft.trim()"
+                  @click="sendMessage"
+                />
+              </el-tooltip>
+            </div>
+          </div>
+        </main>
+
+        <aside class="evidence-panel">
+          <div class="evidence-header">
+            <span>回答依据</span>
+            <el-tooltip content="显示最近一条回答的依据" placement="top">
+              <el-button :icon="Refresh" circle text @click="selectLatestEvidence" />
+            </el-tooltip>
+          </div>
+
+          <el-tabs v-model="evidenceTab" stretch>
+            <el-tab-pane name="literature">
+              <template #label>文献 {{ activeEvidence.sources.length }}</template>
+              <div v-if="activeEvidence.sources.length" class="evidence-list">
+                <div v-for="source in activeEvidence.sources" :key="source.citation" class="evidence-item">
+                  <div class="evidence-title">
+                    <span>{{ source.citation }}</span>
+                    <strong>{{ source.title }}</strong>
+                  </div>
+                  <p>{{ source.excerpt }}</p>
+                  <div class="evidence-info">
+                    <span v-if="source.page_num">第 {{ source.page_num }} 页</span>
+                    <span v-if="source.score != null">相关度 {{ formatScore(source.score) }}</span>
+                  </div>
+                </div>
+              </div>
+              <el-empty v-else :image-size="72" description="暂无文献依据" />
+            </el-tab-pane>
+
+            <el-tab-pane name="graph">
+              <template #label>图谱 {{ activeEvidence.graphEvidence.length }}</template>
+              <div v-if="activeEvidence.graphEvidence.length" class="evidence-list">
+                <div
+                  v-for="item in activeEvidence.graphEvidence"
+                  :key="`${item.citation}-${item.head}-${item.tail}`"
+                  class="evidence-item graph-fact"
+                >
+                  <span class="citation">{{ item.citation }}</span>
+                  <div class="fact-node">{{ item.head }}</div>
+                  <div v-if="item.tail" class="fact-relation">{{ item.relation }}</div>
+                  <div v-if="item.tail" class="fact-node tail">{{ item.tail }}</div>
+                  <p v-if="item.evidence_text">{{ item.evidence_text }}</p>
+                </div>
+              </div>
+              <el-empty v-else :image-size="72" description="暂无图谱依据" />
+            </el-tab-pane>
+          </el-tabs>
+        </aside>
+      </div>
+    </section>
   </div>
 </template>
+
 <script setup>
-import { ref, onMounted } from 'vue';
-const ragflowIframe = ref(null);
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ChatDotRound,
+  Connection,
+  Delete,
+  Document,
+  Plus,
+  Promotion,
+  Refresh,
+  Search,
+  User
+} from '@element-plus/icons-vue'
+import { assistantAPI } from '@/api/assistant'
 
-const scrollToTop = () => {
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-  if (ragflowIframe.value) {
-    try {
-      const iframeWindow = ragflowIframe.value.contentWindow;
-      iframeWindow.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch (e) {
-      console.warn('跨域限制，无法操作iframe内部滚动');
-    }
+
+const STORAGE_KEY = 'ceramikg-assistant-sessions-v1'
+const mode = ref('hybrid')
+const draft = ref('')
+const sending = ref(false)
+const sessions = ref([])
+const activeSessionId = ref('')
+const selectedMessageId = ref('')
+const evidenceTab = ref('literature')
+const messageListRef = ref(null)
+
+const starterPrompts = [
+  '氧化铝陶瓷的主要烧结影响因素有哪些？',
+  '请总结当前文献中的陶瓷增韧方法',
+  '知识图谱中与烧结温度相关的实体有哪些？',
+  '比较不同陶瓷材料的力学性能研究结论'
+]
+
+const activeSession = computed(() => (
+  sessions.value.find(item => item.id === activeSessionId.value) || sessions.value[0]
+))
+
+const messages = computed(() => activeSession.value?.messages || [])
+
+const selectedEvidenceMessage = computed(() => (
+  messages.value.find(item => item.id === selectedMessageId.value && item.role === 'assistant')
+  || [...messages.value].reverse().find(item => item.role === 'assistant')
+  || null
+))
+
+const activeEvidence = computed(() => ({
+  sources: selectedEvidenceMessage.value?.sources || [],
+  graphEvidence: selectedEvidenceMessage.value?.graphEvidence || []
+}))
+
+function newId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function createSession() {
+  const session = {
+    id: newId('session'),
+    title: '新对话',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: []
   }
-};
+  sessions.value.unshift(session)
+  activeSessionId.value = session.id
+  selectedMessageId.value = ''
+  draft.value = ''
+}
 
-// 页面挂载后初始化iframe样式（保留原有功能）
-onMounted(() => {
-  const iframe = ragflowIframe.value;
-  if (!iframe) return;
+async function removeSession(sessionId) {
+  if (sessions.value.length === 1 && sessions.value[0].messages.length === 0) return
+  try {
+    await ElMessageBox.confirm('删除这条对话记录？', '删除对话', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    sessions.value = sessions.value.filter(item => item.id !== sessionId)
+    if (!sessions.value.length) createSession()
+    if (activeSessionId.value === sessionId) activeSessionId.value = sessions.value[0].id
+  } catch {
+    // User cancelled.
+  }
+}
 
-  // iframe加载完成后适配内部内容
-  iframe.onload = () => {
-    scrollToTop(); // 初始加载后滚动到顶部
-    try {
-      const innerDoc = iframe.contentDocument || iframe.contentWindow.document;
-      if (innerDoc) {
-        // 调整RAGFlow内部内容样式，避免与遮蔽层冲突
-        innerDoc.body.style.height = '100%';
-        innerDoc.documentElement.style.height = '100%';
-        const rootEl = innerDoc.querySelector('#app') || innerDoc.body;
-        if (rootEl) {
-          rootEl.style.height = '100%';
-          rootEl.style.width = '100%';
-        }
-      }
-    } catch (e) {
-      console.warn('跨域限制，使用默认适配');
+function usePrompt(prompt) {
+  draft.value = prompt
+  nextTick(() => sendMessage())
+}
+
+async function sendMessage() {
+  const question = draft.value.trim()
+  if (!question || sending.value || !activeSession.value) return
+
+  const history = messages.value.slice(-8).map(item => ({
+    role: item.role,
+    content: item.content
+  }))
+  activeSession.value.messages.push({
+    id: newId('message'),
+    role: 'user',
+    content: question,
+    createdAt: Date.now()
+  })
+  if (activeSession.value.title === '新对话') {
+    activeSession.value.title = question.length > 20 ? `${question.slice(0, 20)}…` : question
+  }
+  activeSession.value.updatedAt = Date.now()
+  draft.value = ''
+  sending.value = true
+  await scrollToBottom()
+
+  try {
+    const result = await assistantAPI.chat({
+      question,
+      history,
+      mode: mode.value,
+      top_k: 5,
+      graph_limit: 8
+    })
+    const assistantMessage = {
+      id: newId('message'),
+      role: 'assistant',
+      content: result.answer,
+      sources: result.sources || [],
+      graphEvidence: result.graph_evidence || [],
+      suggestedQuestions: result.suggested_questions || [],
+      warnings: result.warnings || [],
+      metadata: result.metadata || {},
+      createdAt: Date.now()
     }
-  };
-});
+    activeSession.value.messages.push(assistantMessage)
+    activeSession.value.updatedAt = Date.now()
+    selectedMessageId.value = assistantMessage.id
+    if (!assistantMessage.sources.length && assistantMessage.graphEvidence.length) {
+      evidenceTab.value = 'graph'
+    }
+  } catch (error) {
+    const detail = error.response?.data?.detail || '智能问答服务暂时不可用，请稍后重试'
+    activeSession.value.messages.push({
+      id: newId('message'),
+      role: 'assistant',
+      content: detail,
+      warnings: ['请求未完成'],
+      sources: [],
+      graphEvidence: [],
+      suggestedQuestions: [],
+      metadata: {},
+      createdAt: Date.now()
+    })
+    ElMessage.error(detail)
+  } finally {
+    sending.value = false
+    await scrollToBottom()
+  }
+}
+
+function handleComposerKeydown(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    sendMessage()
+  }
+}
+
+function openEvidence(message, tab) {
+  selectedMessageId.value = message.id
+  evidenceTab.value = tab
+}
+
+function selectEvidence(message) {
+  if (message.role === 'assistant') selectedMessageId.value = message.id
+}
+
+function selectLatestEvidence() {
+  const latest = [...messages.value].reverse().find(item => item.role === 'assistant')
+  if (latest) selectedMessageId.value = latest.id
+}
+
+function isLatestAssistant(message) {
+  return [...messages.value].reverse().find(item => item.role === 'assistant')?.id === message.id
+}
+
+async function scrollToBottom() {
+  await nextTick()
+  if (messageListRef.value) {
+    messageListRef.value.scrollTop = messageListRef.value.scrollHeight
+  }
+}
+
+function formatScore(score) {
+  const value = Number(score)
+  if (!Number.isFinite(value)) return '-'
+  return value.toFixed(2)
+}
+
+function formatTime(timestamp) {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  const today = new Date()
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }
+  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+}
+
+watch(sessions, value => {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
+}, { deep: true })
+
+watch(activeSessionId, () => {
+  selectedMessageId.value = ''
+  scrollToBottom()
+})
+
+onMounted(() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
+    sessions.value = Array.isArray(saved) ? saved : []
+  } catch {
+    sessions.value = []
+  }
+  if (!sessions.value.length) createSession()
+  activeSessionId.value = sessions.value[0].id
+})
 </script>
+
 <style scoped>
-/* 清除默认样式（保留原有） */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-/* 页面基础样式（保留原有） */
-html, body {
-  width: 100%;
-  height: 100%;
-  overflow: hidden; /* 禁止页面整体滚动 */
-  background: #f5f5f5;
-}
-
-/* 外层容器 - 点击区域覆盖整个页面（保留原有） */
-.build-container {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 10px;
-  cursor: pointer; /* 提示可点击 */
-}
-
-/* 固定容器 - 作为定位父容器（保留原有） */
-.fixed-container {
-  width: 95vw; /* 宽度占视口的95% */
-  max-width: 1400px; /* 最大宽度增大到1400px */
-  height: 78vh; /* 高度占视口的78%（可根据需求调整） */
-  max-height: 900px; /* 最大高度增大到900px */
-  position: relative; /* 关键：让遮蔽层相对于此容器定位 */
+.assistant-page {
+  --ink: #263238;
+  --muted: #6c7a80;
+  --line: #dfe5e7;
+  --surface: #ffffff;
+  --soft: #f4f7f7;
+  --teal: #137a70;
+  --blue: #315f86;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  height: calc(100vh - 148px);
+  min-height: 640px;
   overflow: hidden;
-  box-shadow: 0 2px 15px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.session-panel {
+  min-width: 0;
+  border-right: 1px solid var(--line);
+  background: #f0f4f3;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-header,
+.evidence-header {
+  height: 54px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.session-list {
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.session-item {
+  width: 100%;
+  height: 58px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-item:hover,
+.session-item.active {
+  background: #fff;
+  border-color: #d5dfdc;
+}
+
+.session-icon {
+  width: 17px;
+  color: var(--teal);
+}
+
+.session-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.session-time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-delete {
+  opacity: 0;
+}
+
+.session-item:hover .session-delete {
+  opacity: 1;
+}
+
+.assistant-workspace {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-header {
+  min-height: 70px;
+  padding: 10px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.workspace-header h1 {
+  margin: 0 0 7px;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.service-status {
+  display: flex;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.service-status span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--teal);
+}
+
+.status-dot.graph { background: var(--blue); }
+.status-dot.model { background: #c85d44; }
+
+.workspace-body {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(480px, 1fr) 320px;
+}
+
+.chat-panel {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.message-list {
+  min-height: 0;
+  flex: 1;
+  padding: 22px max(22px, 5%);
+  overflow-y: auto;
+  background: #fbfcfc;
+}
+
+.empty-state {
+  max-width: 660px;
+  margin: 12vh auto 0;
+  text-align: center;
+}
+
+.assistant-mark {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #e2efec;
+  color: var(--teal);
+}
+
+.assistant-mark svg { width: 22px; }
+
+.empty-state h2 {
+  margin: 0 0 22px;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.prompt-grid button,
+.suggestions button {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: #435158;
+  cursor: pointer;
+  text-align: left;
+}
+
+.prompt-grid button {
+  min-height: 54px;
+  padding: 10px 12px;
+  line-height: 1.45;
+}
+
+.prompt-grid button:hover,
+.suggestions button:hover {
+  border-color: #7fa9a1;
+  color: var(--teal);
+}
+
+.message-row {
+  max-width: 820px;
+  margin: 0 auto 22px;
+  display: flex;
+  gap: 11px;
+}
+
+.message-row.user {
+  flex-direction: row-reverse;
+}
+
+.message-avatar {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #e2efec;
+  color: var(--teal);
+}
+
+.message-row.user .message-avatar {
+  background: #e6edf4;
+  color: var(--blue);
+}
+
+.message-avatar svg { width: 16px; }
+
+.message-content {
+  min-width: 0;
+  max-width: calc(100% - 42px);
+}
+
+.message-bubble {
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.7;
+  font-size: 14px;
+}
+
+.message-row.user .message-bubble {
+  border-color: #d5e2ea;
+  background: #eef4f8;
+}
+
+.warning-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.warning-list span {
+  padding: 3px 7px;
+  border-radius: 3px;
+  background: #fff1ec;
+  color: #a84b37;
+  font-size: 11px;
+}
+
+.message-meta {
+  min-height: 27px;
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.message-meta button {
+  border: 0;
+  padding: 3px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  color: var(--blue);
+  cursor: pointer;
+}
+
+.message-meta svg { width: 13px; }
+
+.message-meta > span { margin-left: auto; }
+
+.suggestions {
+  margin-top: 9px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.suggestions button {
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.thinking {
+  width: 64px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.thinking span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7e9893;
+  animation: thinking 1.2s infinite ease-in-out;
+}
+
+.thinking span:nth-child(2) { animation-delay: 0.15s; }
+.thinking span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes thinking {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.composer {
+  padding: 12px 16px 10px;
+  border-top: 1px solid var(--line);
   background: #fff;
 }
 
-/* 核心：带字幕的遮蔽层样式 */
-/* 核心：居左且带左侧空隙的遮蔽层样式 */
-.ragflow-mask {
-  position: absolute;
-  top: 0; /* 遮蔽层在顶部（与原有一致） */
-  left: 0;
-  right: 0;
-  height: 55px; /* 保持原有高度，确保完全遮蔽图标栏 */
-  background: #fff; /* 与RAGFlow页面背景一致，无视觉割裂 */
-  z-index: 10; /* 高于iframe，确保遮蔽生效 */
-  /* 垂直居中+水平居左（带空隙） */
+.composer :deep(.el-textarea__inner) {
+  min-height: 68px !important;
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px var(--line) inset;
+  font-size: 14px;
+}
+
+.composer :deep(.el-textarea__inner:focus) {
+  box-shadow: 0 0 0 1px var(--teal) inset;
+}
+
+.composer-footer {
+  height: 34px;
   display: flex;
-  align-items: center; /* 垂直居中，确保字幕不偏上偏下 */
-  justify-content: flex-start; /* 水平居左，不居中 */
-  padding-left: 24px; /* 核心：左侧空隙（24px视觉更舒适，可按需调整） */
-  padding-top: 15px;
+  align-items: flex-end;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
 }
 
-/* 字幕样式（优化视觉效果） */
-.mask-title {
-  font-size: 28px; /* 字体大小适中，清晰可见 */
-  color: #333; /* 深灰色文字，不刺眼且醒目 */
-  font-weight: 500; /* 中等加粗，提升层次感 */
-  letter-spacing: 0.5px; /* 轻微字距，提升可读性 */
+.composer-footer :deep(.el-button--primary) {
+  background: var(--teal);
+  border-color: var(--teal);
 }
 
-/* iframe样式（保留原有，确保在遮蔽层下方） */
-.ragflow-iframe {
-  width: 100%;
+.evidence-panel {
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+.evidence-panel :deep(.el-tabs) {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.evidence-panel :deep(.el-tabs__header) {
+  margin: 0;
+}
+
+.evidence-panel :deep(.el-tabs__content) {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.evidence-panel :deep(.el-tab-pane) {
   height: 100%;
-  border: none;
-  display: block;
-  z-index: 1;
+}
+
+.evidence-list {
+  padding: 12px;
+}
+
+.evidence-item {
+  padding: 11px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--soft);
+}
+
+.evidence-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.evidence-title span,
+.citation {
+  flex-shrink: 0;
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.evidence-title strong {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.evidence-item p {
+  margin: 8px 0 0;
+  color: #56656b;
+  font-size: 12px;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.evidence-info {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.graph-fact {
+  position: relative;
+}
+
+.fact-node {
+  margin-top: 9px;
+  padding: 7px 9px;
+  border-left: 3px solid var(--teal);
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.fact-node.tail { border-left-color: var(--blue); }
+
+.fact-relation {
+  padding: 5px 9px;
+  color: #9a4f3f;
+  font-size: 11px;
+}
+
+@media (max-width: 1180px) {
+  .assistant-page { grid-template-columns: 180px minmax(0, 1fr); }
+  .workspace-body { grid-template-columns: minmax(420px, 1fr) 280px; }
+}
+
+@media (max-width: 920px) {
+  .assistant-page { grid-template-columns: 1fr; height: auto; min-height: 760px; }
+  .session-panel { display: none; }
+  .workspace-body { grid-template-columns: 1fr; }
+  .chat-panel { min-height: 620px; }
+  .evidence-panel { border-left: 0; border-top: 1px solid var(--line); min-height: 360px; }
+}
+
+@media (max-width: 640px) {
+  .workspace-header { align-items: flex-start; flex-direction: column; }
+  .prompt-grid { grid-template-columns: 1fr; }
+  .message-list { padding: 16px 10px; }
+  .composer-footer > span { display: none; }
 }
 </style>

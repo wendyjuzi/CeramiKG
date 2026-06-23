@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     QWEN_API_BASE: str = os.getenv("QWEN_API_BASE", "http://localhost:8000/v1")
     MODEL_NAME: str = os.getenv("MODEL_NAME", "deepseek-chat")
 
+    # Intelligent assistant integrations
+    RAG_SERVICE_URL: str = os.getenv("RAG_SERVICE_URL", "http://localhost:8001")
+    RAG_REQUEST_TIMEOUT: float = float(os.getenv("RAG_REQUEST_TIMEOUT", "12"))
+
     # App init flags
     INIT_DB_ON_STARTUP: bool = os.getenv("INIT_DB_ON_STARTUP", "false").lower() in ("1", "true", "yes")
     INIT_DB_MARKER: str = os.getenv("INIT_DB_MARKER", ".init_db_done")

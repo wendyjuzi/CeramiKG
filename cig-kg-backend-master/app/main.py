@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import  graph_2, document_governance
-from app.dependencies.dependencies import mongo_service_extended, mysql_service
+from app.routes import assistant, graph_2, document_governance
+from app.dependencies.dependencies import mongo_service_extended, mysql_service, neo4j_service
 from app.config import settings
 from pathlib import Path
 import importlib.util
@@ -33,6 +33,7 @@ app.add_middleware(
 
 app.include_router(graph_2.router, prefix="/api/graph", tags=["Graph Construction"])
 app.include_router(document_governance.router, tags=["Document Governance"])
+app.include_router(assistant.router, prefix="/api/assistant", tags=["Intelligent Assistant"])
 
 
 @app.on_event("startup")
@@ -87,7 +88,7 @@ async def shutdown_event():
     try:
         await mongo_service_extended.close()
         await mysql_service.close()
-        # await neo4j_service.close()
+        await neo4j_service.close()
         print("Database connections closed successfully")
     except Exception as e:
         print(f"Error closing databases: {e}")

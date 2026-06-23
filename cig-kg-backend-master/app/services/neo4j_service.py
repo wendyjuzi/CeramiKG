@@ -36,6 +36,9 @@ class Neo4jService:
             logger.info("Neo4j initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j: {e}")
+            if self.driver:
+                await self.driver.close()
+                self.driver = None
             raise
 
     async def close(self):
@@ -857,6 +860,115 @@ class Neo4jService:
                 logger.warning(f"Knowledge table does not exist for document {document_name}")
 
     # ==================== 辅助方法 ====================
+
+    async def search_assistant_context(
+        self,
+        question: str,
+        limit: int = 8,
+        document_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return a small, question-related graph neighborhood for assistant context."""
+        terms = self._assistant_search_terms(question)
+        document_ids = [str(item) for item in (document_ids or [])]
+        query = """
+            MATCH (entity)
+            WHERE entity:Entity OR entity:GlobalEntity
+            WITH entity,
+                 coalesce(entity.entity_name, entity.name, entity.label, '') AS entity_name
+            WHERE entity_name <> ''
+              AND size(entity_name) >= 2
+              AND (
+                toLower($question) CONTAINS toLower(entity_name)
+                OR any(term IN $terms WHERE
+                    toLower(entity_name) CONTAINS term
+                    OR term CONTAINS toLower(entity_name)
+                )
+              )
+              AND (
+                size($document_ids) = 0
+                OR entity:GlobalEntity
+                OR toString(entity.document_id) IN $document_ids
+              )
+            OPTIONAL MATCH (entity)-[rel]-(neighbor)
+            WHERE neighbor IS NULL OR neighbor:Entity OR neighbor:GlobalEntity
+            WITH entity, entity_name, rel, neighbor,
+                 CASE
+                    WHEN toLower($question) CONTAINS toLower(entity_name) THEN 2
+                    ELSE 1
+                 END AS relevance
+            RETURN
+                entity_name AS head,
+                CASE
+                    WHEN rel IS NULL THEN '相关实体'
+                    ELSE coalesce(rel.relation_name, type(rel), '相关')
+                END AS relation,
+                CASE
+                    WHEN neighbor IS NULL THEN ''
+                    ELSE coalesce(neighbor.entity_name, neighbor.name, neighbor.label, '')
+                END AS tail,
+                coalesce(entity.document_id, rel.document_id) AS document_id,
+                CASE
+                    WHEN rel IS NULL THEN coalesce(entity.description, '')
+                    ELSE coalesce(rel.evidence_text, rel.description, entity.description, '')
+                END AS evidence_text,
+                relevance
+            ORDER BY relevance DESC, head
+            LIMIT $limit
+        """
+
+        async with self.driver.session() as session:
+            result = await session.run(
+                query,
+                {
+                    "question": question.lower(),
+                    "terms": terms,
+                    "document_ids": document_ids,
+                    "limit": max(1, min(int(limit), 20)),
+                },
+            )
+            rows = []
+            seen = set()
+            async for record in result:
+                item = record.data()
+                key = (item.get("head"), item.get("relation"), item.get("tail"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                item.pop("relevance", None)
+                rows.append(item)
+            return rows
+
+    @staticmethod
+    def _assistant_search_terms(question: str) -> List[str]:
+        """Create bounded Chinese/English search terms without requiring a tokenizer."""
+        stopwords = {
+            "什么", "哪些", "如何", "为什么", "是否", "可以", "请问", "介绍",
+            "相关", "之间", "以及", "进行", "影响", "因素", "情况", "材料",
+        }
+        terms = []
+        seen = set()
+        segments = re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_\-]{1,}|[\u4e00-\u9fff]{2,}", question.lower())
+
+        for segment in segments:
+            candidates = [segment]
+            if re.fullmatch(r"[\u4e00-\u9fff]+", segment):
+                for size in (3, 2, 4):
+                    candidates.extend(
+                        segment[index:index + size]
+                        for index in range(max(0, len(segment) - size + 1))
+                    )
+            for candidate in candidates:
+                if (
+                    candidate in seen
+                    or len(candidate) < 2
+                    or any(stopword in candidate for stopword in stopwords)
+                ):
+                    continue
+                seen.add(candidate)
+                terms.append(candidate)
+                if len(terms) >= 24:
+                    return terms
+        return terms
 
     async def get_entity_network(self, document_id: str, entity_id: str, depth: int = 2) -> Dict[str, Any]:
         """

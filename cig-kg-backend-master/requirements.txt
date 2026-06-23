@@ -19,3 +19,4 @@ cryptography
 zhipuai
 sniffio
 neo4j
+httpx

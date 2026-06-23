@@ -137,16 +137,37 @@ def parse_and_index_with_rag(file_path: str, doc_name: str, markdown_text: str |
 #         logger.error(f"处理文件失败: {e}")
 #         return jsonify({'error': str(e)}), 500
 
+@app.route('/rag/search', methods=['POST'])
+def rag_search():
+    if not rag_adapter:
+        return jsonify({'error': 'RAG service not available'}), 503
+    data = request.get_json(silent=True) or {}
+    question = str(data.get('question') or '').strip()
+    if not question:
+        return jsonify({'error': 'Missing question'}), 400
+    top_k = max(1, min(int(data.get('top_k', 5)), 10))
+    document_names = data.get('document_names') or []
+    try:
+        chunks = rag_adapter.search(question, top_k=top_k, document_names=document_names)
+        return jsonify({'status': 'success', 'chunks': chunks, 'count': len(chunks)})
+    except Exception as e:
+        logger.error(f"Search failed: {e}")
+        return jsonify({'error': f"Search failed: {e}"}), 500
+
+
 @app.route('/rag/ask', methods=['POST'])
 def rag_ask():
     if not rag_adapter:
         return jsonify({'error': 'RAG service not available'}), 503
-    data = request.json
-    question = data.get('question')
+    data = request.get_json(silent=True) or {}
+    question = str(data.get('question') or '').strip()
     if not question:
         return jsonify({'error': 'Missing question'}), 400
+    top_k = max(1, min(int(data.get('top_k', 5)), 10))
+    document_names = data.get('document_names') or []
+    history = data.get('history') or []
     try:
-        chunks = rag_adapter.search(question, top_k=5)
+        chunks = rag_adapter.search(question, top_k=top_k, document_names=document_names)
     except Exception as e:
         logger.error(f"Search failed: {e}")
         return jsonify({'error': f"Search failed: {e}"}), 500
@@ -156,9 +177,14 @@ def rag_ask():
     try:
         context = "\n\n".join([f"片段 {i+1} : {c['content'][:500]}" for i, c in enumerate(chunks)])
         system_prompt = f"你是一个智能助手。请基于以下上下文回答用户的问题。如果上下文中没有答案，请如实告知。\n\n上下文:\n{context}"
-        response = llm.chat.completions.create(model=MODEL_NAME, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": question}])
+        messages = [{"role": "system", "content": system_prompt}]
+        for item in history[-8:]:
+            if item.get('role') in {'user', 'assistant'} and item.get('content'):
+                messages.append({'role': item['role'], 'content': str(item['content'])[:8000]})
+        messages.append({"role": "user", "content": question})
+        response = llm.chat.completions.create(model=MODEL_NAME, messages=messages)
         answer = response.choices[0].message.content
-        return jsonify({'answer': answer, 'chunks': chunks})
+        return jsonify({'answer': answer, 'chunks': chunks, 'model': MODEL_NAME})
     except Exception as e:
         logger.error(f"LLM generation failed: {e}")
         return jsonify({'error': f"Generation failed: {e}"}), 500

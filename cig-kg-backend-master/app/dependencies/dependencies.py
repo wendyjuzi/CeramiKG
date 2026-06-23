@@ -3,6 +3,7 @@ from app.services.mysql_service import MySQLService
 from app.services.prompt_service import PromptService
 # 新增：导入 Neo4j 服务
 from app.services.neo4j_service import Neo4jService
+from app.services.assistant_service import AssistantService
 
 # 全局服务实例
 
@@ -11,6 +12,7 @@ mysql_service = MySQLService()
 prompt_service = PromptService()
 # 新增：实例化 Neo4j 服务
 neo4j_service = Neo4jService()
+assistant_service = AssistantService(neo4j_service)
 
 
 async def get_mongo_service_extended():
@@ -31,3 +33,6 @@ async def get_neo4j_service():
     if neo4j_service.driver is None:
         await neo4j_service.initialize()
     return neo4j_service
+
+async def get_assistant_service():
+    return assistant_service

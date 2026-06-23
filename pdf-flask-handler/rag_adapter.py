@@ -179,17 +179,22 @@ class RAGAdapter:
         logging.info(f"索引完成: {doc_name}, 成功插入 {doc_count} 条")
         return doc_count
 
-    def search(self, query_text, top_k=5):
+    def search(self, query_text, top_k=5, document_names=None):
         """
         简单的关键词检索
         """
+        query = {"match": {"content": query_text}}
+        if document_names:
+            query = {
+                "bool": {
+                    "must": [{"match": {"content": query_text}}],
+                    "filter": [{"terms": {"doc_name": document_names}}]
+                }
+            }
+
         body = {
             "size": top_k,
-            "query": {
-                "match": {
-                    "content": query_text
-                }
-            },
+            "query": query,
             "_source": ["content", "doc_name", "page_num"]
         }
         res = self.es.search(index=self.index_name, body=body)
@@ -199,6 +204,7 @@ class RAGAdapter:
             results.append({
                 "content": hit['_source']['content'],
                 "score": hit['_score'],
-                "doc_name": hit['_source']['doc_name']
+                "doc_name": hit['_source']['doc_name'],
+                "page_num": hit['_source'].get('page_num')
             })
         return results
