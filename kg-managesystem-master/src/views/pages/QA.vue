@@ -3,9 +3,14 @@
     <aside class="session-panel">
       <div class="session-header">
         <span>对话记录</span>
-        <el-tooltip content="新建对话" placement="top">
-          <el-button :icon="Plus" circle text @click="createSession" />
-        </el-tooltip>
+        <div class="session-actions">
+          <el-tooltip content="导出当前对话" placement="top">
+            <el-button :icon="Download" circle text :disabled="!messages.length" @click="exportSession" />
+          </el-tooltip>
+          <el-tooltip content="新建对话" placement="top">
+            <el-button :icon="Plus" circle text @click="createSession" />
+          </el-tooltip>
+        </div>
       </div>
 
       <div class="session-list">
@@ -72,6 +77,13 @@
             <el-radio-button label="literature">文献</el-radio-button>
             <el-radio-button label="graph">图谱</el-radio-button>
           </el-radio-group>
+
+          <el-tooltip content="检索参数" placement="top">
+            <el-button :icon="Setting" circle text @click="settingsVisible = true" />
+          </el-tooltip>
+          <el-tooltip content="对比已选回答" placement="top">
+            <el-button :icon="DataAnalysis" circle text :disabled="!comparisonReady" @click="openComparison" />
+          </el-tooltip>
         </div>
       </header>
 
@@ -135,6 +147,19 @@
                       :class="{ review: message.feedback === 'needs_review' }"
                       @click.stop="openFeedbackDialog(message)"
                     />
+                  </el-tooltip>
+                  <el-tooltip content="选择用于对比" placement="top">
+                    <el-button
+                      :icon="ScaleToOriginal"
+                      circle
+                      text
+                      class="compare-button"
+                      :class="{ active: comparisonMessageIds.includes(message.id) }"
+                      @click.stop="toggleComparison(message)"
+                    />
+                  </el-tooltip>
+                  <el-tooltip content="生成阅读或实验计划" placement="top">
+                    <el-button :icon="Operation" circle text @click.stop="openPlanDialog(message)" />
                   </el-tooltip>
                   <span v-if="message.scopeLabel" class="scope-meta">{{ message.scopeLabel }}</span>
                   <span>{{ message.metadata?.generated_by === 'llm' ? message.metadata?.model : '检索结果' }}</span>
@@ -241,18 +266,22 @@
                   <div v-if="item.tail" class="fact-relation">{{ item.relation }}</div>
                   <div v-if="item.tail" class="fact-node tail">{{ item.tail }}</div>
                   <p v-if="item.evidence_text">{{ item.evidence_text }}</p>
-                  <div v-if="item.paper_title || item.document_id" class="evidence-info graph-source">
-                    <span>{{ item.paper_title || `图谱范围：${item.document_id}` }}</span>
-                    <el-tooltip content="在知识图谱中定位" placement="top">
-                      <el-button
-                        :icon="Connection"
-                        circle
-                        text
-                        size="small"
-                        :disabled="!item.document_id"
-                        @click="openGraphEvidence(item)"
-                      />
-                    </el-tooltip>
+                  <div class="evidence-info graph-source">
+                    <span v-if="item.paper_title || item.document_id">{{ item.paper_title || `图谱范围：${item.document_id}` }}</span>
+                    <div class="graph-actions">
+                      <el-tooltip v-if="item.document_id" content="在知识图谱中定位" placement="top">
+                        <el-button
+                          :icon="Connection"
+                          circle
+                          text
+                          size="small"
+                          @click="openGraphEvidence(item)"
+                        />
+                      </el-tooltip>
+                      <el-tooltip content="围绕此关系追问" placement="top">
+                        <el-button :icon="Promotion" circle text size="small" @click="askAboutRelation(item)" />
+                      </el-tooltip>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -329,6 +358,74 @@
         <el-button type="primary" :loading="feedbackSubmitting" @click="createFeedbackTask">创建核验任务</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="settingsVisible" title="检索参数" width="min(480px, 92vw)">
+      <el-form label-position="top">
+        <el-form-item label="文献检索数量">
+          <el-slider v-model="retrievalTopK" :min="1" :max="10" show-input />
+        </el-form-item>
+        <el-form-item label="图谱关系数量">
+          <el-slider v-model="retrievalGraphLimit" :min="1" :max="20" show-input />
+        </el-form-item>
+      </el-form>
+    </el-dialog>
+
+    <el-dialog v-model="comparisonVisible" title="回答对比" width="min(1180px, 94vw)" destroy-on-close>
+      <div class="comparison-grid">
+        <section v-for="(message, index) in comparisonMessages" :key="message.id" class="comparison-column">
+          <div class="comparison-heading">
+            <span>回答 {{ index + 1 }}</span>
+            <small>{{ questionForMessage(message) }}</small>
+          </div>
+          <div class="comparison-answer">{{ message.content }}</div>
+          <div class="comparison-meta">
+            <span>{{ message.scopeLabel || '未记录范围' }}</span>
+            <span>{{ message.metadata?.mode || '未记录模式' }}</span>
+            <span>文献 Top {{ message.retrievalSettings?.topK || 5 }}</span>
+            <span>图谱 {{ message.retrievalSettings?.graphLimit || 8 }} 条</span>
+          </div>
+          <div v-if="message.sources?.length" class="comparison-evidence">
+            <strong>文献依据</strong>
+            <ul>
+              <li v-for="source in message.sources" :key="source.citation">
+                {{ source.citation }} {{ source.title }}
+              </li>
+            </ul>
+          </div>
+          <div v-if="message.graphEvidence?.length" class="comparison-evidence">
+            <strong>图谱依据</strong>
+            <ul>
+              <li v-for="item in message.graphEvidence" :key="`${item.citation}-${item.head}-${item.tail}`">
+                {{ item.citation }} {{ item.head }}{{ item.tail ? ` -[${item.relation}]-> ${item.tail}` : '' }}
+              </li>
+            </ul>
+          </div>
+        </section>
+      </div>
+      <template #footer>
+        <el-button @click="clearComparison">清除选择</el-button>
+        <el-button type="primary" @click="comparisonVisible = false">完成</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="planDialogVisible" title="自动计划" width="min(680px, 94vw)" destroy-on-close>
+      <el-radio-group v-model="planType" size="small" class="plan-type-switch">
+        <el-radio-button label="reading">阅读计划</el-radio-button>
+        <el-radio-button label="experiment">实验验证计划</el-radio-button>
+      </el-radio-group>
+      <el-steps direction="vertical" :active="0" class="plan-steps">
+        <el-step
+          v-for="(step, index) in generatedPlan.steps"
+          :key="`${planType}-${index}`"
+          :title="step.title"
+          :description="step.description"
+        />
+      </el-steps>
+      <template #footer>
+        <el-button @click="planDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="planTaskCreating" @click="createPlanTask">创建计划任务</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -340,12 +437,17 @@ import {
   ChatDotRound,
   CircleCheck,
   Connection,
+  DataAnalysis,
   Delete,
+  Download,
   Document,
+  Operation,
   Plus,
   Promotion,
   Refresh,
+  ScaleToOriginal,
   Search,
+  Setting,
   Tickets,
   User,
   View,
@@ -380,7 +482,19 @@ const feedbackDialogVisible = ref(false)
 const feedbackSubmitting = ref(false)
 const feedbackMessage = ref(null)
 const feedbackNote = ref('')
+const settingsVisible = ref(false)
+const comparisonMessageIds = ref([])
+const comparisonVisible = ref(false)
+const planDialogVisible = ref(false)
+const planTaskCreating = ref(false)
+const planMessage = ref(null)
+const planType = ref('reading')
 const router = useRouter()
+
+const DEFAULT_RETRIEVAL_SETTINGS = {
+  topK: 5,
+  graphLimit: 8
+}
 
 const starterPrompts = [
   '氧化铝陶瓷的主要烧结影响因素有哪些？',
@@ -394,6 +508,26 @@ const activeSession = computed(() => (
 ))
 
 const messages = computed(() => activeSession.value?.messages || [])
+
+function updateRetrievalSetting(key, value) {
+  if (!activeSession.value) return
+  activeSession.value.retrievalSettings = {
+    ...DEFAULT_RETRIEVAL_SETTINGS,
+    ...(activeSession.value.retrievalSettings || {}),
+    [key]: Number(value)
+  }
+  activeSession.value.updatedAt = Date.now()
+}
+
+const retrievalTopK = computed({
+  get: () => activeSession.value?.retrievalSettings?.topK || DEFAULT_RETRIEVAL_SETTINGS.topK,
+  set: value => updateRetrievalSetting('topK', value)
+})
+
+const retrievalGraphLimit = computed({
+  get: () => activeSession.value?.retrievalSettings?.graphLimit || DEFAULT_RETRIEVAL_SETTINGS.graphLimit,
+  set: value => updateRetrievalSetting('graphLimit', value)
+})
 
 const selectedDocumentIds = computed({
   get: () => activeSession.value?.documentIds || [],
@@ -432,6 +566,14 @@ const activeEvidence = computed(() => ({
   graphEvidence: selectedEvidenceMessage.value?.graphEvidence || []
 }))
 
+const comparisonMessages = computed(() => comparisonMessageIds.value
+  .map(messageId => messages.value.find(item => item.id === messageId && item.role === 'assistant'))
+  .filter(Boolean))
+
+const comparisonReady = computed(() => comparisonMessages.value.length === 2)
+
+const generatedPlan = computed(() => buildGeneratedPlan(planMessage.value, planType.value))
+
 const previewUrl = computed(() => (
   previewSource.value?.preview_path ? `/pdf${previewSource.value.preview_path}` : ''
 ))
@@ -447,6 +589,7 @@ function createSession() {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     documentIds: [],
+    retrievalSettings: { ...DEFAULT_RETRIEVAL_SETTINGS },
     messages: []
   }
   sessions.value.unshift(session)
@@ -505,8 +648,8 @@ async function sendMessage() {
       mode: mode.value,
       document_ids: selectedDocumentIds.value,
       document_names: selectedDocumentNames.value,
-      top_k: 5,
-      graph_limit: 8
+      top_k: retrievalTopK.value,
+      graph_limit: retrievalGraphLimit.value
     })
     const assistantMessage = {
       id: newId('message'),
@@ -518,6 +661,10 @@ async function sendMessage() {
       warnings: result.warnings || [],
       metadata: result.metadata || {},
       scopeLabel: selectedScopeLabel.value,
+      retrievalSettings: {
+        topK: retrievalTopK.value,
+        graphLimit: retrievalGraphLimit.value
+      },
       createdAt: Date.now()
     }
     activeSession.value.messages.push(assistantMessage)
@@ -569,6 +716,244 @@ function selectLatestEvidence() {
 
 function isLatestAssistant(message) {
   return [...messages.value].reverse().find(item => item.role === 'assistant')?.id === message.id
+}
+
+function toggleComparison(message) {
+  const selected = comparisonMessageIds.value
+  if (selected.includes(message.id)) {
+    comparisonMessageIds.value = selected.filter(id => id !== message.id)
+    return
+  }
+  if (selected.length >= 2) {
+    ElMessage.warning('已选择两条回答，请先取消其中一条')
+    return
+  }
+  comparisonMessageIds.value = [...selected, message.id]
+  if (comparisonMessageIds.value.length === 2) {
+    ElMessage.success('已选择两条回答，可点击顶部对比按钮查看')
+  }
+}
+
+function openComparison() {
+  if (!comparisonReady.value) {
+    ElMessage.warning('请先选择两条助手回答')
+    return
+  }
+  comparisonVisible.value = true
+}
+
+function clearComparison() {
+  comparisonMessageIds.value = []
+  comparisonVisible.value = false
+}
+
+function askAboutRelation(item) {
+  if (!item?.head) return
+  const relation = item.tail
+    ? `“${item.head}”与“${item.tail}”之间“${item.relation}”的关系`
+    : `“${item.head}”相关的图谱关系`
+  const paper = item.paper_title ? `，并重点核对《${item.paper_title}》中的证据` : ''
+  usePrompt(`请结合当前文献与知识图谱，说明${relation}的证据、可能机制和仍需验证的问题${paper}。`)
+}
+
+function compactText(text, limit = 180) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim()
+  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized
+}
+
+function buildGeneratedPlan(message, type) {
+  if (!message) return { label: '', steps: [] }
+
+  const question = questionForMessage(message)
+  const sources = message.sources || []
+  const relations = message.graphEvidence || []
+  const relationSummary = relations
+    .slice(0, 2)
+    .map(item => item.tail ? `${item.head} -[${item.relation}]-> ${item.tail}` : item.head)
+    .join('；')
+
+  if (type === 'experiment') {
+    return {
+      label: '实验验证计划',
+      steps: [
+        {
+          title: '明确验证目标',
+          description: `围绕“${question}”将本次回答拆成可验证的材料、工艺或性能假设。`
+        },
+        {
+          title: '建立变量与对照',
+          description: relationSummary
+            ? `优先围绕图谱关系“${relationSummary}”设置自变量、对照组和重复样。`
+            : '从回答中抽取关键工艺参数，设置单变量或正交对照组。'
+        },
+        {
+          title: '制备与表征',
+          description: sources.length
+            ? `参考 ${sources.slice(0, 2).map(source => source.title).join('、')} 中的条件，记录制备、烧结和表征参数。`
+            : '先补充可复现实验条件，再安排制备、性能测试与显微表征。'
+        },
+        {
+          title: '分析与复核',
+          description: '将结果与回答结论、文献片段和图谱关系逐项比对，记录支持、偏差及下一轮问题。'
+        }
+      ]
+    }
+  }
+
+  const readingSteps = sources.slice(0, 3).map((source, index) => ({
+    title: `精读文献 ${index + 1}`,
+    description: `${source.title}${source.page_num ? `（重点第 ${source.page_num} 页）` : ''}：${compactText(source.excerpt)}`
+  }))
+  return {
+    label: '阅读计划',
+    steps: [
+      {
+        title: '定位问题与结论',
+        description: `先核对问题“${question}”与本次回答中的核心结论、适用条件和不确定性。`
+      },
+      ...(readingSteps.length ? readingSteps : [{
+        title: '补充核心文献',
+        description: '本次回答未返回文献依据，先扩展检索范围并补充可阅读的原始文献。'
+      }]),
+      {
+        title: '核验图谱关系',
+        description: relationSummary
+          ? `对照图谱关系“${relationSummary}”，确认实体、关系类型和证据是否一致。`
+          : '记录回答中的关键实体与术语，继续检索其关联关系。'
+      },
+      {
+        title: '形成阅读笔记',
+        description: '输出证据矩阵：结论、引用位置、实验条件、局限性和后续追问。'
+      }
+    ]
+  }
+}
+
+function openPlanDialog(message) {
+  planMessage.value = message
+  planType.value = 'reading'
+  planDialogVisible.value = true
+}
+
+async function createPlanTask() {
+  const message = planMessage.value
+  if (!message || !generatedPlan.value.steps.length) return
+
+  const question = questionForMessage(message)
+  const plan = generatedPlan.value
+  const planText = plan.steps
+    .map((step, index) => `${index + 1}. ${step.title}\n${step.description}`)
+    .join('\n\n')
+  const description = [
+    `计划类型：${plan.label}`,
+    `原始问题：${question}`,
+    `自动计划：\n${planText}`,
+    '',
+    buildTaskDescription(message, question)
+  ].join('\n\n')
+
+  planTaskCreating.value = true
+  try {
+    await assistantAPI.createTask({
+      title: `${plan.label}：${question}`.slice(0, 255),
+      description: description.length > 5000 ? `${description.slice(0, 4999)}…` : description,
+      task_type: planType.value === 'reading' ? 'literature' : 'qa',
+      status: 'pending',
+      priority: 'medium',
+      related_document_id: (message.sources || []).find(source => source.document_id)?.document_id || null
+    })
+    planDialogVisible.value = false
+    ElMessage.success(`${plan.label}任务已创建`)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '创建计划任务失败，请稍后重试')
+  } finally {
+    planTaskCreating.value = false
+  }
+}
+
+function quoteMarkdown(text) {
+  return String(text || '').split('\n').map(line => `> ${line}`).join('\n')
+}
+
+function formatExportTime(timestamp) {
+  return new Date(timestamp || Date.now()).toLocaleString('zh-CN', {
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+function exportSession() {
+  const session = activeSession.value
+  if (!session?.messages?.length) {
+    ElMessage.warning('当前对话暂无可导出的内容')
+    return
+  }
+
+  const lines = [
+    '# CeramiKG 智能问答记录',
+    '',
+    `- 对话：${session.title || '未命名对话'}`,
+    `- 导出时间：${formatExportTime()}`,
+    `- 当前范围：${selectedScopeLabel.value}`,
+    ''
+  ]
+
+  session.messages.forEach((message, index) => {
+    const heading = message.role === 'user' ? '用户问题' : '系统回答'
+    lines.push(`## ${index + 1}. ${heading}`, '', quoteMarkdown(message.content), '')
+
+    if (message.role !== 'assistant') return
+
+    if (message.scopeLabel || message.metadata?.mode) {
+      lines.push(`- 检索范围：${message.scopeLabel || '未记录'}`)
+      lines.push(`- 问答模式：${message.metadata?.mode || '未记录'}`)
+    }
+    if (message.metadata?.generated_by) {
+      lines.push(`- 生成方式：${message.metadata.generated_by === 'llm' ? message.metadata.model || '大模型' : '检索结果'}`)
+    }
+    if (message.feedback === 'helpful') lines.push('- 反馈：有帮助')
+    if (message.feedback === 'needs_review') lines.push('- 反馈：已创建核验任务')
+    if (message.warnings?.length) lines.push(`- 提示：${message.warnings.join('；')}`)
+
+    if (message.sources?.length) {
+      lines.push('', '### 文献依据')
+      message.sources.forEach(source => {
+        const page = source.page_num ? `，第 ${source.page_num} 页` : ''
+        lines.push(`- ${source.citation} ${source.title}${page}`)
+        lines.push(`  - 摘要：${source.excerpt}`)
+      })
+    }
+
+    if (message.graphEvidence?.length) {
+      lines.push('', '### 图谱依据')
+      message.graphEvidence.forEach(item => {
+        const relation = item.tail ? `${item.head} -[${item.relation}]-> ${item.tail}` : item.head
+        const paper = item.paper_title || item.document_id
+        lines.push(`- ${item.citation} ${relation}${paper ? `（${paper}）` : ''}`)
+        if (item.evidence_text) lines.push(`  - 证据：${item.evidence_text}`)
+      })
+    }
+    lines.push('')
+  })
+
+  const filename = `${String(session.title || 'ceramikg-qa')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 48) || 'ceramikg-qa'}-${new Date().toISOString().slice(0, 10)}.md`
+  const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = window.document.createElement('a')
+  link.href = url
+  link.download = filename
+  window.document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+  ElMessage.success('当前对话已导出')
 }
 
 function openSourcePreview(source) {
@@ -737,6 +1122,9 @@ watch(sessions, value => {
 
 watch(activeSessionId, () => {
   selectedMessageId.value = ''
+  comparisonMessageIds.value = []
+  comparisonVisible.value = false
+  planDialogVisible.value = false
   scrollToBottom()
 })
 
@@ -750,6 +1138,11 @@ onMounted(() => {
   if (!sessions.value.length) createSession()
   sessions.value.forEach(session => {
     if (!Array.isArray(session.documentIds)) session.documentIds = []
+    const settings = session.retrievalSettings || {}
+    session.retrievalSettings = {
+      topK: Math.max(1, Math.min(10, Number(settings.topK) || DEFAULT_RETRIEVAL_SETTINGS.topK)),
+      graphLimit: Math.max(1, Math.min(20, Number(settings.graphLimit) || DEFAULT_RETRIEVAL_SETTINGS.graphLimit))
+    }
   })
   activeSessionId.value = sessions.value[0].id
   loadGraphScopes()
@@ -795,6 +1188,12 @@ onMounted(() => {
   font-weight: 600;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
+}
+
+.session-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .session-list {
@@ -883,6 +1282,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -1069,6 +1469,7 @@ onMounted(() => {
   margin-top: 5px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   color: var(--muted);
   font-size: 11px;
@@ -1095,6 +1496,11 @@ onMounted(() => {
 .message-meta :deep(.feedback-button.review) {
   color: #b85b32;
   background: #fff1e9;
+}
+
+.message-meta :deep(.compare-button.active) {
+  color: #315f86;
+  background: #e6edf4;
 }
 
 .message-meta > span { margin-left: auto; }
@@ -1276,11 +1682,101 @@ onMounted(() => {
   justify-content: flex-start;
 }
 
+.graph-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.graph-actions :deep(.el-button) {
+  margin-left: 0;
+}
+
 .preview-frame {
   display: block;
   width: 100%;
   height: min(72vh, 780px);
   border: 0;
+}
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.comparison-column {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+}
+
+.comparison-heading {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.comparison-heading > span {
+  color: var(--teal);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.comparison-heading small,
+.comparison-meta {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.comparison-answer {
+  white-space: pre-wrap;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.comparison-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 11px;
+}
+
+.comparison-meta span {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #fff;
+}
+
+.comparison-evidence {
+  margin-top: 13px;
+}
+
+.comparison-evidence strong {
+  color: var(--blue);
+  font-size: 12px;
+}
+
+.comparison-evidence ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: #56656b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.plan-type-switch {
+  margin-bottom: 16px;
+}
+
+.plan-steps {
+  min-height: 280px;
 }
 
 .fact-node {
@@ -1321,5 +1817,6 @@ onMounted(() => {
   .prompt-grid { grid-template-columns: 1fr; }
   .message-list { padding: 16px 10px; }
   .composer-footer > span { display: none; }
+  .comparison-grid { grid-template-columns: 1fr; }
 }
 </style>
