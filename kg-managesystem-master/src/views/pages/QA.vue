@@ -116,6 +116,26 @@
                   <el-tooltip content="创建问答任务" placement="top">
                     <el-button :icon="Tickets" circle text @click.stop="openTaskDialog(message)" />
                   </el-tooltip>
+                  <el-tooltip content="回答有帮助" placement="top">
+                    <el-button
+                      :icon="CircleCheck"
+                      circle
+                      text
+                      class="feedback-button"
+                      :class="{ active: message.feedback === 'helpful' }"
+                      @click.stop="toggleHelpfulFeedback(message)"
+                    />
+                  </el-tooltip>
+                  <el-tooltip content="需要核验" placement="top">
+                    <el-button
+                      :icon="WarningFilled"
+                      circle
+                      text
+                      class="feedback-button"
+                      :class="{ review: message.feedback === 'needs_review' }"
+                      @click.stop="openFeedbackDialog(message)"
+                    />
+                  </el-tooltip>
                   <span v-if="message.scopeLabel" class="scope-meta">{{ message.scopeLabel }}</span>
                   <span>{{ message.metadata?.generated_by === 'llm' ? message.metadata?.model : '检索结果' }}</span>
                 </div>
@@ -290,6 +310,25 @@
         <el-button type="primary" :loading="taskCreating" @click="createTask">创建任务</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="feedbackDialogVisible" title="提交核验反馈" width="min(520px, 92vw)" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="需要核验的内容（可选）">
+          <el-input
+            v-model="feedbackNote"
+            type="textarea"
+            :rows="5"
+            maxlength="1500"
+            show-word-limit
+            placeholder="例如：结论与原文不一致、引用范围不足或需要补充实验条件"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="feedbackDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="feedbackSubmitting" @click="createFeedbackTask">创建核验任务</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -299,6 +338,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ChatDotRound,
+  CircleCheck,
   Connection,
   Delete,
   Document,
@@ -308,7 +348,8 @@ import {
   Search,
   Tickets,
   User,
-  View
+  View,
+  WarningFilled
 } from '@element-plus/icons-vue'
 import { assistantAPI } from '@/api/assistant'
 
@@ -335,6 +376,10 @@ const taskDraft = ref({
   priority: 'medium',
   relatedDocumentId: null
 })
+const feedbackDialogVisible = ref(false)
+const feedbackSubmitting = ref(false)
+const feedbackMessage = ref(null)
+const feedbackNote = ref('')
 const router = useRouter()
 
 const starterPrompts = [
@@ -574,6 +619,54 @@ function openTaskDialog(message) {
     relatedDocumentId: taskSources.value[0]?.document_id || null
   }
   taskDialogVisible.value = true
+}
+
+function toggleHelpfulFeedback(message) {
+  message.feedback = message.feedback === 'helpful' ? null : 'helpful'
+  activeSession.value.updatedAt = Date.now()
+  ElMessage.success(message.feedback === 'helpful' ? '已记录为有帮助' : '已取消反馈')
+}
+
+function openFeedbackDialog(message) {
+  if (message.feedback === 'needs_review') {
+    ElMessage.info('这条回答已创建核验任务')
+    return
+  }
+  feedbackMessage.value = message
+  feedbackNote.value = ''
+  feedbackDialogVisible.value = true
+}
+
+async function createFeedbackTask() {
+  const message = feedbackMessage.value
+  if (!message) return
+
+  const question = questionForMessage(message)
+  const feedback = feedbackNote.value.trim() || '用户标记该回答需要进一步核验。'
+  const description = [
+    buildTaskDescription(message, question),
+    `核验反馈：${feedback}`
+  ].join('\n\n')
+
+  feedbackSubmitting.value = true
+  try {
+    await assistantAPI.createTask({
+      title: `核验反馈：${question}`.slice(0, 255),
+      description: description.length > 5000 ? `${description.slice(0, 4999)}…` : description,
+      task_type: 'qa',
+      status: 'pending',
+      priority: 'high',
+      related_document_id: (message.sources || []).find(source => source.document_id)?.document_id || null
+    })
+    message.feedback = 'needs_review'
+    activeSession.value.updatedAt = Date.now()
+    feedbackDialogVisible.value = false
+    ElMessage.success('核验任务已创建')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '创建核验任务失败，请稍后重试')
+  } finally {
+    feedbackSubmitting.value = false
+  }
 }
 
 async function createTask() {
@@ -993,6 +1086,16 @@ onMounted(() => {
 }
 
 .message-meta svg { width: 13px; }
+
+.message-meta :deep(.feedback-button.active) {
+  color: #22735f;
+  background: #e8f5ef;
+}
+
+.message-meta :deep(.feedback-button.review) {
+  color: #b85b32;
+  background: #fff1e9;
+}
 
 .message-meta > span { margin-left: auto; }
 
