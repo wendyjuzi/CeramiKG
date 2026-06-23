@@ -43,11 +43,36 @@
           </div>
         </div>
 
-        <el-radio-group v-model="mode" size="small">
-          <el-radio-button label="hybrid">综合</el-radio-button>
-          <el-radio-button label="literature">文献</el-radio-button>
-          <el-radio-button label="graph">图谱</el-radio-button>
-        </el-radio-group>
+        <div class="header-controls">
+          <el-select
+            v-model="selectedDocumentIds"
+            class="scope-select"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            filterable
+            :loading="scopeLoading"
+            placeholder="全部已导入图谱"
+          >
+            <el-option
+              v-for="scope in graphScopes"
+              :key="scope.document_id"
+              :label="scope.display_name"
+              :value="scope.document_id"
+            >
+              <div class="scope-option">
+                <span>{{ scope.display_name }}</span>
+                <small>{{ scope.table_count || 0 }} 项</small>
+              </div>
+            </el-option>
+          </el-select>
+
+          <el-radio-group v-model="mode" size="small">
+            <el-radio-button label="hybrid">综合</el-radio-button>
+            <el-radio-button label="literature">文献</el-radio-button>
+            <el-radio-button label="graph">图谱</el-radio-button>
+          </el-radio-group>
+        </div>
       </header>
 
       <div class="workspace-body">
@@ -88,6 +113,7 @@
                   <button v-if="message.graphEvidence?.length" @click.stop="openEvidence(message, 'graph')">
                     <Connection />{{ message.graphEvidence.length }} 条关系
                   </button>
+                  <span v-if="message.scopeLabel" class="scope-meta">{{ message.scopeLabel }}</span>
                   <span>{{ message.metadata?.generated_by === 'llm' ? message.metadata?.model : '检索结果' }}</span>
                 </div>
 
@@ -182,6 +208,9 @@
                   <div v-if="item.tail" class="fact-relation">{{ item.relation }}</div>
                   <div v-if="item.tail" class="fact-node tail">{{ item.tail }}</div>
                   <p v-if="item.evidence_text">{{ item.evidence_text }}</p>
+                  <div v-if="item.paper_title || item.document_id" class="evidence-info graph-source">
+                    <span>{{ item.paper_title || `图谱范围：${item.document_id}` }}</span>
+                  </div>
                 </div>
               </div>
               <el-empty v-else :image-size="72" description="暂无图谱依据" />
@@ -219,6 +248,8 @@ const activeSessionId = ref('')
 const selectedMessageId = ref('')
 const evidenceTab = ref('literature')
 const messageListRef = ref(null)
+const graphScopes = ref([])
+const scopeLoading = ref(false)
 
 const starterPrompts = [
   '氧化铝陶瓷的主要烧结影响因素有哪些？',
@@ -232,6 +263,23 @@ const activeSession = computed(() => (
 ))
 
 const messages = computed(() => activeSession.value?.messages || [])
+
+const selectedDocumentIds = computed({
+  get: () => activeSession.value?.documentIds || [],
+  set: value => {
+    if (activeSession.value) activeSession.value.documentIds = value
+  }
+})
+
+const selectedScopeLabel = computed(() => {
+  const ids = selectedDocumentIds.value
+  if (!ids.length) return '全部图谱'
+  const names = graphScopes.value
+    .filter(scope => ids.includes(scope.document_id))
+    .map(scope => scope.display_name)
+  if (names.length === 1) return names[0]
+  return `${names.length || ids.length} 篇图谱`
+})
 
 const selectedEvidenceMessage = computed(() => (
   messages.value.find(item => item.id === selectedMessageId.value && item.role === 'assistant')
@@ -254,6 +302,7 @@ function createSession() {
     title: '新对话',
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    documentIds: [],
     messages: []
   }
   sessions.value.unshift(session)
@@ -310,6 +359,7 @@ async function sendMessage() {
       question,
       history,
       mode: mode.value,
+      document_ids: selectedDocumentIds.value,
       top_k: 5,
       graph_limit: 8
     })
@@ -322,6 +372,7 @@ async function sendMessage() {
       suggestedQuestions: result.suggested_questions || [],
       warnings: result.warnings || [],
       metadata: result.metadata || {},
+      scopeLabel: selectedScopeLabel.value,
       createdAt: Date.now()
     }
     activeSession.value.messages.push(assistantMessage)
@@ -398,6 +449,19 @@ function formatTime(timestamp) {
   return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
 }
 
+async function loadGraphScopes() {
+  scopeLoading.value = true
+  try {
+    const result = await assistantAPI.getGraphScopes()
+    graphScopes.value = Array.isArray(result) ? result : []
+  } catch (error) {
+    graphScopes.value = []
+    console.warn('加载图谱范围失败:', error)
+  } finally {
+    scopeLoading.value = false
+  }
+}
+
 watch(sessions, value => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
 }, { deep: true })
@@ -415,7 +479,11 @@ onMounted(() => {
     sessions.value = []
   }
   if (!sessions.value.length) createSession()
+  sessions.value.forEach(session => {
+    if (!Array.isArray(session.documentIds)) session.documentIds = []
+  })
   activeSessionId.value = sessions.value[0].id
+  loadGraphScopes()
 })
 </script>
 
@@ -540,6 +608,27 @@ onMounted(() => {
   font-size: 19px;
   font-weight: 600;
   letter-spacing: 0;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.scope-select {
+  width: 240px;
+}
+
+.scope-option {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.scope-option small {
+  color: var(--muted);
 }
 
 .service-status {
@@ -731,6 +820,18 @@ onMounted(() => {
 
 .message-meta > span { margin-left: auto; }
 
+.message-meta .scope-meta {
+  margin-left: 2px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-meta .scope-meta + span {
+  margin-left: auto;
+}
+
 .suggestions {
   margin-top: 9px;
   display: flex;
@@ -885,6 +986,10 @@ onMounted(() => {
   position: relative;
 }
 
+.graph-source {
+  justify-content: flex-start;
+}
+
 .fact-node {
   margin-top: 9px;
   padding: 7px 9px;
@@ -918,6 +1023,8 @@ onMounted(() => {
 
 @media (max-width: 640px) {
   .workspace-header { align-items: flex-start; flex-direction: column; }
+  .header-controls { width: 100%; align-items: stretch; flex-direction: column; }
+  .scope-select { width: 100%; }
   .prompt-grid { grid-template-columns: 1fr; }
   .message-list { padding: 16px 10px; }
   .composer-footer > span { display: none; }

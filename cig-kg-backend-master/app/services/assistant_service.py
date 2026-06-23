@@ -73,6 +73,7 @@ class AssistantService:
                 "mode": request.mode,
                 "literature_count": len(sources),
                 "graph_count": len(graph_evidence),
+                "document_ids": request.document_ids,
                 "generated_by": generated_by,
                 "model": settings.MODEL_NAME if generated_by == "llm" else None,
             },
@@ -134,6 +135,7 @@ class AssistantService:
                     relation=str(row.get("relation") or "相关实体"),
                     tail=str(row.get("tail") or "").strip() or None,
                     document_id=str(row.get("document_id")) if row.get("document_id") is not None else None,
+                    paper_title=str(row.get("paper_title") or "").strip() or None,
                     evidence_text=self._truncate(str(row.get("evidence_text") or "").strip(), 500) or None,
                 )
             )

@@ -11,5 +11,9 @@ export const assistantAPI = {
   async chat(payload) {
     const response = await assistantClient.post('/api/assistant/chat', payload)
     return response.data
+  },
+  async getGraphScopes() {
+    const response = await assistantClient.get('/api/graph/knowledge-graph-options')
+    return response.data
   }
 }

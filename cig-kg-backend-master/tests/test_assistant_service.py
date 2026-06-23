@@ -24,12 +24,14 @@ class AssistantServiceTests(unittest.IsolatedAsyncioTestCase):
             "relation": "受影响于",
             "tail": "烧结温度",
             "document_id": "12",
+            "paper_title": "氧化铝陶瓷烧结研究",
             "evidence_text": "烧结温度影响晶粒生长和致密化。",
         }])
 
         with patch.object(service, "_llm_config", return_value=None):
             result = await service.chat(AssistantChatRequest(
                 question="哪些因素影响氧化铝陶瓷致密度？",
+                document_ids=["12"],
             ))
 
         self.assertEqual(len(result.sources), 1)
@@ -37,6 +39,8 @@ class AssistantServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[文献1]", result.answer)
         self.assertIn("[图谱1]", result.answer)
         self.assertEqual(result.metadata["generated_by"], "retrieval")
+        self.assertEqual(result.metadata["document_ids"], ["12"])
+        self.assertEqual(result.graph_evidence[0].paper_title, "氧化铝陶瓷烧结研究")
 
     async def test_chat_returns_clear_message_when_no_evidence_exists(self):
         service = AssistantService(DummyNeo4jService())

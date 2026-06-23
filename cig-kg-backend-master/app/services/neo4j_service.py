@@ -1309,7 +1309,7 @@ class Neo4jService:
         document_ids = [str(item) for item in (document_ids or [])]
         query = """
             MATCH (entity)
-            WHERE entity:Entity OR entity:GlobalEntity
+            WHERE entity:Entity OR entity:GlobalEntity OR entity:CeramicEntity
             WITH entity,
                  coalesce(entity.entity_name, entity.name, entity.label, '') AS entity_name
             WHERE entity_name <> ''
@@ -1325,10 +1325,18 @@ class Neo4jService:
                 size($document_ids) = 0
                 OR entity:GlobalEntity
                 OR toString(entity.document_id) IN $document_ids
+                OR EXISTS {
+                    MATCH (paper:Paper)-[:MENTIONS]->(entity)
+                    WHERE paper.paper_id IN $document_ids
+                }
               )
             OPTIONAL MATCH (entity)-[rel]-(neighbor)
-            WHERE neighbor IS NULL OR neighbor:Entity OR neighbor:GlobalEntity
-            WITH entity, entity_name, rel, neighbor,
+            WHERE neighbor IS NULL
+               OR neighbor:Entity
+               OR neighbor:GlobalEntity
+               OR neighbor:CeramicEntity
+            OPTIONAL MATCH (paper:Paper {paper_id: rel.paper_id})
+            WITH entity, entity_name, rel, neighbor, paper,
                  CASE
                     WHEN toLower($question) CONTAINS toLower(entity_name) THEN 2
                     ELSE 1
@@ -1337,16 +1345,17 @@ class Neo4jService:
                 entity_name AS head,
                 CASE
                     WHEN rel IS NULL THEN '相关实体'
-                    ELSE coalesce(rel.relation_name, type(rel), '相关')
+                    ELSE coalesce(rel.relation_name, rel.relation_type, type(rel), '相关')
                 END AS relation,
                 CASE
                     WHEN neighbor IS NULL THEN ''
                     ELSE coalesce(neighbor.entity_name, neighbor.name, neighbor.label, '')
                 END AS tail,
-                coalesce(entity.document_id, rel.document_id) AS document_id,
+                coalesce(entity.document_id, rel.document_id, rel.paper_id) AS document_id,
+                paper.title AS paper_title,
                 CASE
                     WHEN rel IS NULL THEN coalesce(entity.description, '')
-                    ELSE coalesce(rel.evidence_text, rel.description, entity.description, '')
+                    ELSE coalesce(rel.evidence_text, rel.evidence, rel.description, entity.description, entity.context, '')
                 END AS evidence_text,
                 relevance
             ORDER BY relevance DESC, head

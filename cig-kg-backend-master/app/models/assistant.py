@@ -32,6 +32,7 @@ class AssistantGraphEvidence(BaseModel):
     relation: str
     tail: Optional[str] = None
     document_id: Optional[str] = None
+    paper_title: Optional[str] = None
     evidence_text: Optional[str] = None
 
 
