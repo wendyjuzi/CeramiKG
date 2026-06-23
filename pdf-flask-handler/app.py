@@ -1384,6 +1384,61 @@ def get_files():
         return jsonify({'status': 'error', 'message': f'Failed to get files: {str(e)}'}), 500
 
 
+@app.route('/files/resolve', methods=['POST'])
+def resolve_files():
+    """Resolve RAG document names to previewable document records."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        document_names = payload.get('document_names', [])
+        if not isinstance(document_names, list):
+            return jsonify({'status': 'error', 'message': 'document_names must be a list'}), 400
+
+        resolved = []
+        seen_names = set()
+        for raw_name in document_names[:20]:
+            document_name = str(raw_name or '').strip()
+            normalized_name = document_name.casefold()
+            if not document_name or normalized_name in seen_names:
+                continue
+            seen_names.add(normalized_name)
+
+            document = Document.query.filter(or_(
+                Document.name == document_name,
+                Document.display_title == document_name,
+                Document.original_name == document_name,
+            )).order_by(Document.id.desc()).first()
+
+            if not document:
+                document = Document.query.filter(or_(
+                    Document.name.ilike(document_name),
+                    Document.display_title.ilike(document_name),
+                    Document.original_name.ilike(document_name),
+                )).order_by(Document.id.desc()).first()
+
+            if not document:
+                continue
+
+            repository = next(
+                (key for key, value in LIBRARY_TYPE_MAP.items() if value == document.file_type),
+                None,
+            )
+            if not repository:
+                continue
+
+            resolved.append({
+                'document_name': document_name,
+                'document_id': document.id,
+                'display_title': document.display_title or document.name,
+                'repository': repository,
+                'preview_path': f'/files/{repository}/{document.id}/preview',
+            })
+
+        return jsonify({'status': 'success', 'data': {'documents': resolved}}), 200
+    except Exception as e:
+        logger.error(f"解析问答文献失败: {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f'Failed to resolve files: {str(e)}'}), 500
+
+
 @app.route('/files/stats', methods=['GET'])
 def get_file_stats():
     try:

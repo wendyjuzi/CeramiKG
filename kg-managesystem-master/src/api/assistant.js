@@ -15,5 +15,9 @@ export const assistantAPI = {
   async getGraphScopes() {
     const response = await assistantClient.get('/api/graph/knowledge-graph-options')
     return response.data
+  },
+  async createTask(payload) {
+    const response = await assistantClient.post('/pdf/tasks', payload)
+    return response.data
   }
 }

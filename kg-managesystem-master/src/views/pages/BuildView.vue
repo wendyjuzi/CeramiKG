@@ -167,7 +167,7 @@
 import { computed, ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ArrowRight, RefreshLeft } from '@element-plus/icons-vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import axios from 'axios'
 import DocumentSelector from '@/components/DocumentSelector.vue'
 import TermSelector from '@/components/TermSelector.vue'
@@ -202,6 +202,7 @@ const currentStep = ref(1)
 
 // 组件引用
 const relationEvaluatorRef = ref(null)
+const route = useRoute()
 
 // 数据状态
 const selectedDocument = ref(null)
@@ -460,6 +461,16 @@ onBeforeRouteLeave(async (to, from, next) => {
 onMounted(() => {
   console.log('BuildView: Component mounted, starting build process')
   startBuild()
+  const requestedDocumentId = Array.isArray(route.query.document_id)
+    ? route.query.document_id[0]
+    : route.query.document_id
+  if (requestedDocumentId) {
+    selectedDocument.value = {
+      document_id: String(requestedDocumentId),
+      name: String(requestedDocumentId)
+    }
+    currentStep.value = 6
+  }
   updateBuildStep(currentStep.value)
 })
 

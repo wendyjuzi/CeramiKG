@@ -338,7 +338,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import * as d3 from 'd3'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
@@ -646,9 +646,23 @@ export default {
 
     // 处理文档变化
     const handleDocumentChange = () => {
+      emit('update:document-id', selectedDocumentOption.value || '')
       if (selectedDocumentOption.value) {
         loadKnowledgeGraph()
       }
+    }
+
+    const loadRequestedDocumentGraph = async () => {
+      if (!props.documentId) return
+      const option = knowledgeTables.value.find(
+        item => String(item.document_id) === String(props.documentId)
+      )
+      if (!option) {
+        ElMessage.warning('未找到该文献对应的知识图谱')
+        return
+      }
+      selectedDocumentOption.value = option.document_id
+      await loadKnowledgeGraph()
     }
 
     // 渲染图谱
@@ -1155,9 +1169,16 @@ export default {
     }
 
     // 生命周期
-    onMounted(() => {
-      loadKnowledgeTables()
+    onMounted(async () => {
+      await loadKnowledgeTables()
+      await loadRequestedDocumentGraph()
       window.addEventListener('resize', resizeHandler)
+    })
+
+    watch(() => props.documentId, async (documentId) => {
+      if (!documentId || String(documentId) === String(selectedDocumentOption.value)) return
+      if (!knowledgeTables.value.length) await loadKnowledgeTables()
+      await loadRequestedDocumentGraph()
     })
 
     onUnmounted(() => {

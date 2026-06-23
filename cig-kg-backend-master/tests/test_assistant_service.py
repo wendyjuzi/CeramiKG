@@ -16,8 +16,12 @@ class AssistantServiceTests(unittest.IsolatedAsyncioTestCase):
         service._retrieve_literature = AsyncMock(return_value=[{
             "content": "氧化铝陶瓷的致密度随烧结温度升高而增加。",
             "doc_name": "氧化铝陶瓷烧结研究.pdf",
+            "display_title": "氧化铝陶瓷烧结研究",
             "score": 3.2,
             "page_num": 4,
+            "document_id": 42,
+            "repository": "ceramic_papers",
+            "preview_path": "/files/ceramic_papers/42/preview",
         }])
         service._retrieve_graph = AsyncMock(return_value=[{
             "head": "氧化铝陶瓷",
@@ -41,6 +45,9 @@ class AssistantServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.metadata["generated_by"], "retrieval")
         self.assertEqual(result.metadata["document_ids"], ["12"])
         self.assertEqual(result.graph_evidence[0].paper_title, "氧化铝陶瓷烧结研究")
+        self.assertEqual(result.sources[0].title, "氧化铝陶瓷烧结研究")
+        self.assertEqual(result.sources[0].document_id, 42)
+        self.assertEqual(result.sources[0].preview_path, "/files/ceramic_papers/42/preview")
 
     async def test_chat_returns_clear_message_when_no_evidence_exists(self):
         service = AssistantService(DummyNeo4jService())

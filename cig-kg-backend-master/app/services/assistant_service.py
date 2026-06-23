@@ -93,7 +93,39 @@ class AssistantService:
             )
             response.raise_for_status()
             data = response.json()
-            return data.get("chunks", [])
+            chunks = data.get("chunks", [])
+
+            document_names = list(dict.fromkeys(
+                str(chunk.get("doc_name") or "").strip()
+                for chunk in chunks
+                if str(chunk.get("doc_name") or "").strip()
+            ))[:20]
+            if not document_names:
+                return chunks
+
+            try:
+                resolved_response = await client.post(
+                    f"{settings.RAG_SERVICE_URL.rstrip('/')}/files/resolve",
+                    json={"document_names": document_names},
+                )
+                resolved_response.raise_for_status()
+                resolved_documents = resolved_response.json().get("data", {}).get("documents", [])
+                resolved_by_name = {
+                    str(item.get("document_name") or "").strip(): item
+                    for item in resolved_documents
+                }
+                for chunk in chunks:
+                    resolved = resolved_by_name.get(str(chunk.get("doc_name") or "").strip())
+                    if resolved:
+                        chunk.update({
+                            key: resolved[key]
+                            for key in ("document_id", "repository", "preview_path", "display_title")
+                            if resolved.get(key) is not None
+                        })
+            except Exception as exc:
+                logger.info("Assistant document resolution skipped: %s", exc)
+
+            return chunks
 
     async def _retrieve_graph(self, request: AssistantChatRequest) -> List[Dict]:
         if self.neo4j_service.driver is None:
@@ -114,10 +146,13 @@ class AssistantService:
             sources.append(
                 AssistantSource(
                     citation=f"[文献{index}]",
-                    title=str(chunk.get("doc_name") or "未命名文献"),
+                    title=str(chunk.get("display_title") or chunk.get("doc_name") or "未命名文献"),
                     excerpt=self._truncate(content, 700),
                     score=float(score) if score is not None else None,
                     page_num=chunk.get("page_num"),
+                    document_id=chunk.get("document_id"),
+                    repository=str(chunk.get("repository") or "").strip() or None,
+                    preview_path=str(chunk.get("preview_path") or "").strip() or None,
                 )
             )
         return sources

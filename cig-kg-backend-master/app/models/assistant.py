@@ -24,6 +24,9 @@ class AssistantSource(BaseModel):
     excerpt: str
     score: Optional[float] = None
     page_num: Optional[int] = None
+    document_id: Optional[int] = None
+    repository: Optional[str] = None
+    preview_path: Optional[str] = None
 
 
 class AssistantGraphEvidence(BaseModel):

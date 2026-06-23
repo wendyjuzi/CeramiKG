@@ -113,6 +113,9 @@
                   <button v-if="message.graphEvidence?.length" @click.stop="openEvidence(message, 'graph')">
                     <Connection />{{ message.graphEvidence.length }} 条关系
                   </button>
+                  <el-tooltip content="创建问答任务" placement="top">
+                    <el-button :icon="Tickets" circle text @click.stop="openTaskDialog(message)" />
+                  </el-tooltip>
                   <span v-if="message.scopeLabel" class="scope-meta">{{ message.scopeLabel }}</span>
                   <span>{{ message.metadata?.generated_by === 'llm' ? message.metadata?.model : '检索结果' }}</span>
                 </div>
@@ -189,6 +192,16 @@
                   <div class="evidence-info">
                     <span v-if="source.page_num">第 {{ source.page_num }} 页</span>
                     <span v-if="source.score != null">相关度 {{ formatScore(source.score) }}</span>
+                    <el-tooltip content="预览文献" placement="top">
+                      <el-button
+                        :icon="View"
+                        circle
+                        text
+                        size="small"
+                        :disabled="!source.preview_path"
+                        @click="openSourcePreview(source)"
+                      />
+                    </el-tooltip>
                   </div>
                 </div>
               </div>
@@ -210,6 +223,16 @@
                   <p v-if="item.evidence_text">{{ item.evidence_text }}</p>
                   <div v-if="item.paper_title || item.document_id" class="evidence-info graph-source">
                     <span>{{ item.paper_title || `图谱范围：${item.document_id}` }}</span>
+                    <el-tooltip content="在知识图谱中定位" placement="top">
+                      <el-button
+                        :icon="Connection"
+                        circle
+                        text
+                        size="small"
+                        :disabled="!item.document_id"
+                        @click="openGraphEvidence(item)"
+                      />
+                    </el-tooltip>
                   </div>
                 </div>
               </div>
@@ -219,11 +242,60 @@
         </aside>
       </div>
     </section>
+
+    <el-dialog
+      v-model="previewVisible"
+      :title="`文献预览：${previewSource?.title || ''}`"
+      width="min(1100px, 92vw)"
+      destroy-on-close
+    >
+      <iframe v-if="previewUrl" :src="previewUrl" class="preview-frame" title="文献预览" />
+      <el-empty v-else description="该文献暂不可预览" />
+    </el-dialog>
+
+    <el-dialog v-model="taskDialogVisible" title="创建问答任务" width="min(560px, 92vw)" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="任务标题">
+          <el-input v-model="taskDraft.title" maxlength="255" show-word-limit />
+        </el-form-item>
+        <el-form-item label="优先级">
+          <el-select v-model="taskDraft.priority" style="width: 100%">
+            <el-option label="低" value="low" />
+            <el-option label="中" value="medium" />
+            <el-option label="高" value="high" />
+            <el-option label="紧急" value="urgent" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="关联文献（可选）">
+          <el-select
+            v-model="taskDraft.relatedDocumentId"
+            clearable
+            placeholder="未找到可关联的已登记文献"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="source in taskSources"
+              :key="source.document_id"
+              :label="source.title"
+              :value="source.document_id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="任务说明">
+          <el-input v-model="taskDraft.description" type="textarea" :rows="8" maxlength="5000" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="taskDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="taskCreating" @click="createTask">创建任务</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ChatDotRound,
@@ -234,7 +306,9 @@ import {
   Promotion,
   Refresh,
   Search,
-  User
+  Tickets,
+  User,
+  View
 } from '@element-plus/icons-vue'
 import { assistantAPI } from '@/api/assistant'
 
@@ -250,6 +324,18 @@ const evidenceTab = ref('literature')
 const messageListRef = ref(null)
 const graphScopes = ref([])
 const scopeLoading = ref(false)
+const previewVisible = ref(false)
+const previewSource = ref(null)
+const taskDialogVisible = ref(false)
+const taskCreating = ref(false)
+const taskSources = ref([])
+const taskDraft = ref({
+  title: '',
+  description: '',
+  priority: 'medium',
+  relatedDocumentId: null
+})
+const router = useRouter()
 
 const starterPrompts = [
   '氧化铝陶瓷的主要烧结影响因素有哪些？',
@@ -291,6 +377,10 @@ const activeEvidence = computed(() => ({
   sources: selectedEvidenceMessage.value?.sources || [],
   graphEvidence: selectedEvidenceMessage.value?.graphEvidence || []
 }))
+
+const previewUrl = computed(() => (
+  previewSource.value?.preview_path ? `/pdf${previewSource.value.preview_path}` : ''
+))
 
 function newId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -424,6 +514,82 @@ function selectLatestEvidence() {
 
 function isLatestAssistant(message) {
   return [...messages.value].reverse().find(item => item.role === 'assistant')?.id === message.id
+}
+
+function openSourcePreview(source) {
+  if (!source.preview_path) {
+    ElMessage.warning('该文献尚未关联到本地文献库，暂不可预览')
+    return
+  }
+  previewSource.value = source
+  previewVisible.value = true
+}
+
+function openGraphEvidence(item) {
+  if (!item.document_id) {
+    ElMessage.warning('该图谱关系没有可定位的文献范围')
+    return
+  }
+  router.push({ name: 'BuildKG', query: { document_id: item.document_id } })
+}
+
+function questionForMessage(message) {
+  const index = messages.value.findIndex(item => item.id === message.id)
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (messages.value[cursor]?.role === 'user') return messages.value[cursor].content
+  }
+  return '请核验本次智能问答结论'
+}
+
+function buildTaskDescription(message, question) {
+  const references = [
+    ...(message.sources || []).map(source => `${source.citation} ${source.title}`),
+    ...(message.graphEvidence || []).map(item => `${item.citation} ${item.paper_title || item.document_id || '图谱关系'}`)
+  ]
+  const content = [
+    `问答问题：${question}`,
+    `系统回答：${message.content}`,
+    references.length ? `核对来源：\n${references.join('\n')}` : '核对来源：本次回答未返回可关联证据。'
+  ].join('\n\n')
+  return content.length > 5000 ? `${content.slice(0, 4999)}…` : content
+}
+
+function openTaskDialog(message) {
+  const question = questionForMessage(message)
+  taskSources.value = (message.sources || []).filter(source => source.document_id)
+  taskDraft.value = {
+    title: `核验问答：${question}`.slice(0, 255),
+    description: buildTaskDescription(message, question),
+    priority: 'medium',
+    relatedDocumentId: taskSources.value[0]?.document_id || null
+  }
+  taskDialogVisible.value = true
+}
+
+async function createTask() {
+  const title = taskDraft.value.title.trim()
+  if (!title) {
+    ElMessage.warning('请填写任务标题')
+    return
+  }
+
+  taskCreating.value = true
+  try {
+    await assistantAPI.createTask({
+      title,
+      description: taskDraft.value.description.trim(),
+      task_type: 'qa',
+      status: 'pending',
+      priority: taskDraft.value.priority,
+      related_document_id: taskDraft.value.relatedDocumentId || null
+    })
+    taskDialogVisible.value = false
+    ElMessage.success('问答任务已创建，可在任务管理中继续跟进')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '创建任务失败，请稍后重试')
+  } finally {
+    taskCreating.value = false
+  }
 }
 
 async function scrollToBottom() {
@@ -977,9 +1143,16 @@ onMounted(() => {
 .evidence-info {
   margin-top: 8px;
   display: flex;
+  align-items: center;
+  gap: 8px;
   justify-content: space-between;
   color: var(--muted);
   font-size: 10px;
+}
+
+.evidence-info :deep(.el-button) {
+  margin-left: auto;
+  color: var(--blue);
 }
 
 .graph-fact {
@@ -988,6 +1161,13 @@ onMounted(() => {
 
 .graph-source {
   justify-content: flex-start;
+}
+
+.preview-frame {
+  display: block;
+  width: 100%;
+  height: min(72vh, 780px);
+  border: 0;
 }
 
 .fact-node {
