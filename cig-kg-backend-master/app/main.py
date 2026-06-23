@@ -5,6 +5,7 @@ from app.dependencies.dependencies import mongo_service_extended, mysql_service,
 from app.config import settings
 from pathlib import Path
 import importlib.util
+import os
 import sys
 
 app = FastAPI(title="Knowledge Graph Builder API")
@@ -40,10 +41,13 @@ app.include_router(assistant.router, prefix="/api/assistant", tags=["Intelligent
 async def startup_event():
     """应用启动时初始化数据库连接"""
     try:
+        if os.getenv("KG_ONLY_MODE", "false").lower() in ("1", "true", "yes"):
+            print("KG_ONLY_MODE enabled: skipping MongoDB/MySQL startup initialization")
+            return
+
         await mongo_service_extended.initialize()
         await mysql_service.initialize()
         await _run_first_time_init()
-        # await neo4j_service.initialize()
         print("Database connections initialized successfully")
     except Exception as e:
         print(f"Failed to initialize databases: {e}")

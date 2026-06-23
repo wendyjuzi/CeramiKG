@@ -137,6 +137,11 @@ class KnowledgeStorageRequestNew(BaseModel):
     document_id: str
     relations: List[Relation]
 
+class ExtractedKGImportRequest(BaseModel):
+    root_path: Optional[str] = None
+    limit: Optional[int] = None
+    clear_existing: bool = False
+
 # 知识图谱节点
 class GraphNode(BaseModel):
     id: str

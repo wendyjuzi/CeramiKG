@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from typing import List, Optional
 import logging
+import os
 from app.dependencies.dependencies import get_mongo_service_extended, get_mysql_service, get_prompt_service, get_neo4j_service
 from app.utils.json_validator import JSONValidator
 
@@ -11,12 +12,13 @@ from app.services.mysql_service import MySQLService
 from app.services.neo4j_service import Neo4jService
 from app.services.prompt_service import PromptService
 from app.services.chunked_ie import ChunkedIEService
+from app.services.extracted_kg_import_service import load_extracted_papers, scan_extracted_results
 from app.models.schemas import (
     Document, DocumentSummary, DocumentDetail, Term, Entity, Relation,
     EntityExtractionRequest, RelationExtractionRequest,
     EntityStorageRequest, RelationStorageRequest,
     KnowledgeStorageRequest, KnowledgeStorageRequestNew, KnowledgeGraphResponse, KnowledgeGraphOption, APIResponse, TermFilterRequest,
-    TermCreateRequest, TermUpdateRequest, GraphNode, GraphEdge
+    TermCreateRequest, TermUpdateRequest, GraphNode, GraphEdge, ExtractedKGImportRequest
 )
 
 router = APIRouter()
@@ -747,6 +749,93 @@ async def save_knowledge_new(
 
 # 3.5 知识图谱数据接口（使用Neo4j）
 
+@router.get("/extracted-results/scan")
+async def scan_extracted_kg_results(
+    root_path: Optional[str] = Query(None, description="relation/extracted.json root path"),
+    limit: Optional[int] = Query(None, ge=1, description="Maximum number of extracted.json files to scan")
+):
+    """Scan local relation/**/extracted.json files without connecting to Neo4j."""
+    try:
+        return scan_extracted_results(root_path=root_path, limit=limit)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"扫描抽取结果失败: {e}")
+        raise HTTPException(status_code=500, detail=f"扫描抽取结果失败: {str(e)}")
+
+@router.post("/extracted-results/import", response_model=APIResponse)
+async def import_extracted_kg_results(
+    request: ExtractedKGImportRequest,
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+):
+    """Import relation/**/extracted.json results into Neo4j as the ceramic KG."""
+    try:
+        resolved_root, papers, parse_errors = load_extracted_papers(
+            root_path=request.root_path,
+            limit=request.limit
+        )
+        import_result = await neo4j_service.import_extracted_papers(
+            papers,
+            clear_existing=request.clear_existing
+        )
+        import_result.update({
+            "root_path": str(resolved_root),
+            "parsed_file_count": len(papers),
+            "parse_errors": parse_errors,
+        })
+        return APIResponse(
+            success=len(import_result.get("errors", [])) == 0,
+            message="抽取结果导入Neo4j完成",
+            data=import_result
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"导入抽取结果到Neo4j失败: {e}")
+        raise HTTPException(status_code=500, detail=f"导入抽取结果到Neo4j失败: {str(e)}")
+
+@router.delete("/extracted-results/graph", response_model=APIResponse)
+async def clear_extracted_kg_graph(
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+):
+    """Clear only the Neo4j graph built from relation/**/extracted.json."""
+    try:
+        result = await neo4j_service.clear_extracted_kg()
+        return APIResponse(
+            success=True,
+            message="抽取结果图谱已清空",
+            data=result
+        )
+    except Exception as e:
+        logger.error(f"清空抽取结果图谱失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清空抽取结果图谱失败: {str(e)}")
+
+@router.get("/extracted-results/graph", response_model=KnowledgeGraphResponse)
+async def get_extracted_unified_graph(
+    limit: int = Query(2000, ge=1, le=10000),
+    include_all: bool = Query(False, description="Return all imported extracted relations without LIMIT"),
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+):
+    """Get a unified graph view for imported ceramic extraction results."""
+    try:
+        graph_limit = None if include_all else limit
+        return await neo4j_service.get_extracted_unified_knowledge_graph(limit=graph_limit)
+    except Exception as e:
+        logger.error(f"获取抽取结果全局图谱失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取抽取结果全局图谱失败: {str(e)}")
+
+@router.get("/extracted-results/graph/{paper_id}", response_model=KnowledgeGraphResponse)
+async def get_extracted_graph_by_paper(
+    paper_id: str,
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+):
+    """Get imported ceramic KG data for one paper."""
+    try:
+        return await neo4j_service.get_extracted_knowledge_graph_by_paper_id(paper_id)
+    except Exception as e:
+        logger.error(f"获取论文抽取图谱失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取论文抽取图谱失败: {str(e)}")
+
 @router.get("/knowledge-graph/{document_id}", response_model=KnowledgeGraphResponse)
 async def get_knowledge_graph(
     document_id: str, 
@@ -778,16 +867,23 @@ async def get_knowledge_graph(
         raise HTTPException(status_code=500, detail=f"获取知识图谱失败: {str(e)}")
 
 @router.get("/unified-knowledge-graph", response_model=KnowledgeGraphResponse)
-async def get_unified_knowledge_graph(neo4j_service: Neo4jService = Depends(get_neo4j_service)):
-    """获取全局统一知识图谱数据（使用Neo4j全局知识）"""
+async def get_unified_knowledge_graph(
+    limit: int = Query(2000, ge=1, le=10000),
+    include_all: bool = Query(False, description="Return all imported extracted relations without LIMIT"),
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+):
+    """获取全局统一知识图谱数据（旧全局知识 + relation抽取图谱）"""
     try:
         logger.info("正在从Neo4j查询全局统一知识图谱")
 
-        # 从Neo4j全局知识表获取所有关系数据
+        graph_limit = None if include_all else limit
+        extracted_graph = await neo4j_service.get_extracted_unified_knowledge_graph(limit=graph_limit)
         relations = await neo4j_service.get_global_knowledges()
 
         if not relations:
             logger.warning("Neo4j全局知识图中没有数据")
+            if extracted_graph.nodes or extracted_graph.edges:
+                return extracted_graph
             return KnowledgeGraphResponse(
                 nodes=[],
                 edges=[],
@@ -842,8 +938,21 @@ async def get_unified_knowledge_graph(neo4j_service: Neo4jService = Depends(get_
                 )
                 edges.append(edge)
 
+        for node in extracted_graph.nodes:
+            if node.id not in nodes_dict:
+                nodes_dict[node.id] = node
+
+        existing_edge_ids = {edge.id for edge in edges}
+        for edge in extracted_graph.edges:
+            if edge.id not in existing_edge_ids:
+                edges.append(edge)
+                existing_edge_ids.add(edge.id)
+
         # 转换为列表
         nodes = list(nodes_dict.values())
+
+        legacy_relation_count = len(relations)
+        extracted_relation_count = extracted_graph.metadata.get("total_relations") if extracted_graph.metadata else 0
 
         logger.info(f"Neo4j全局知识图谱构建完成，节点数: {len(nodes)}，边数: {len(edges)}")
 
@@ -853,8 +962,13 @@ async def get_unified_knowledge_graph(neo4j_service: Neo4jService = Depends(get_
             metadata={
                 "total_nodes": len(nodes),
                 "total_edges": len(edges),
-                "total_relations": len(relations),
-                "source": "neo4j_global_knowledge"
+                "total_relations": legacy_relation_count + extracted_relation_count,
+                "legacy_relations": legacy_relation_count,
+                "extracted_relations": extracted_relation_count,
+                "limit": graph_limit,
+                "include_all": bool(extracted_graph.metadata.get("include_all")) if extracted_graph.metadata else include_all,
+                "truncated": bool(extracted_graph.metadata.get("truncated")) if extracted_graph.metadata else False,
+                "source": "neo4j_global_knowledge+relation_extracted"
             }
         )
 
@@ -875,23 +989,24 @@ async def list_knowledge_tables(neo4j_service: Neo4jService = Depends(get_neo4j_
 
 @router.get("/knowledge-graph-options", response_model=List[KnowledgeGraphOption])
 async def get_knowledge_graph_options(
-    neo4j_service: Neo4jService = Depends(get_neo4j_service),
-    mysql_service: MySQLService = Depends(get_mysql_service)
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
 ):
     """获取知识图谱选项列表，包含显示名称和document_id"""
     try:
-        # 从 Neo4j 获取基础选项
         options = await neo4j_service.get_knowledge_graph_options()
-        
-        # 从 MySQL 获取文档名称映射
-        name_map = await mysql_service.get_document_name_map()
-        
-        # 替换显示名称
-        for option in options:
-            if option.document_id in name_map:
-                original_name = name_map[option.document_id]
-                option.display_name = original_name
-                option.description = f"基于文档 '{original_name}' 构建的知识图谱"
+
+        if os.getenv("KG_ONLY_MODE", "false").lower() not in ("1", "true", "yes"):
+            try:
+                mysql_service = await get_mysql_service()
+                name_map = await mysql_service.get_document_name_map()
+
+                for option in options:
+                    if option.document_id in name_map:
+                        original_name = name_map[option.document_id]
+                        option.display_name = original_name
+                        option.description = f"基于文档 '{original_name}' 构建的知识图谱"
+            except Exception as mysql_error:
+                logger.warning(f"MySQL document name mapping unavailable, using Neo4j options only: {mysql_error}")
         
         return options
     except Exception as e:

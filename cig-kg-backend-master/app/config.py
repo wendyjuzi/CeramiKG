@@ -28,8 +28,17 @@ class Settings(BaseSettings):
     # App init flags
     INIT_DB_ON_STARTUP: bool = os.getenv("INIT_DB_ON_STARTUP", "false").lower() in ("1", "true", "yes")
     INIT_DB_MARKER: str = os.getenv("INIT_DB_MARKER", ".init_db_done")
+
+    # Knowledge graph / Neo4j configs
+    KG_ONLY_MODE: bool = os.getenv("KG_ONLY_MODE", "false").lower() in ("1", "true", "yes")
+    NEO4J_URI: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    NEO4J_USER: str = os.getenv("NEO4J_USER", "neo4j")
+    NEO4J_PASSWORD: str = os.getenv("NEO4J_PASSWORD", "password")
+    NEO4J_DATABASE: str = os.getenv("NEO4J_DATABASE", "neo4j")
+    EXTRACTED_KG_ROOT: str = os.getenv("EXTRACTED_KG_ROOT", "../relation")
     
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 settings = Settings()
