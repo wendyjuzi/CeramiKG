@@ -112,7 +112,7 @@
       </div>
 
       <!-- 步骤6: 图谱展示 -->
-      <div v-show="currentStep === 6" class="step-panel">
+      <div v-if="currentStep === 6" class="step-panel">
         <KnowledgeGraph
           :document-id="selectedDocument?.document_id || ''"
           :document-name="selectedDocument?.name || ''"
