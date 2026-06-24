@@ -20,3 +20,7 @@ Thumbs.db
 pdf-flask-handler/uploads/
 cig-kg-backend-master/.init_db_done
 *.log
+
+# Local knowledge-extraction results used as graph import input.
+# Keep these large generated files on the machine, not in Git.
+/relation/

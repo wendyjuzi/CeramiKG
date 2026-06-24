@@ -162,7 +162,7 @@
                     <el-button :icon="Operation" circle text @click.stop="openPlanDialog(message)" />
                   </el-tooltip>
                   <span v-if="message.scopeLabel" class="scope-meta">{{ message.scopeLabel }}</span>
-                  <span>{{ message.metadata?.generated_by === 'llm' ? message.metadata?.model : '检索结果' }}</span>
+                  <span>{{ message.metadata?.generated_by === 'llm' ? message.metadata?.model : message.metadata?.generated_by === 'demo' ? '本地演示' : '检索结果' }}</span>
                 </div>
 
                 <div
@@ -1171,10 +1171,12 @@ onMounted(() => {
 
 .session-panel {
   min-width: 0;
+  min-height: 0;
   border-right: 1px solid var(--line);
   background: #f0f4f3;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .session-header,
@@ -1197,6 +1199,8 @@ onMounted(() => {
 }
 
 .session-list {
+  min-height: 0;
+  flex: 1;
   padding: 8px;
   overflow-y: auto;
 }
@@ -1257,11 +1261,14 @@ onMounted(() => {
 
 .assistant-workspace {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .workspace-header {
+  flex: 0 0 auto;
   min-height: 70px;
   padding: 10px 18px;
   display: flex;
@@ -1328,6 +1335,7 @@ onMounted(() => {
   flex: 1;
   display: grid;
   grid-template-columns: minmax(480px, 1fr) 320px;
+  overflow: hidden;
 }
 
 .chat-panel {
@@ -1335,6 +1343,7 @@ onMounted(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .message-list {
@@ -1555,6 +1564,7 @@ onMounted(() => {
 }
 
 .composer {
+  flex: 0 0 auto;
   padding: 12px 16px 10px;
   border-top: 1px solid var(--line);
   background: #fff;
