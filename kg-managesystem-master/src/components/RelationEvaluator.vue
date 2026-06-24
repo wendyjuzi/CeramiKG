@@ -698,7 +698,7 @@ export default {
       }
     }
 
-    // 保存知识
+    // 保存当前构建结果，并进入图谱可视化步骤。
     const saveKnowledge = async () => {
       if (confirmedRelations.value.length === 0) {
         ElMessage.warning('请先选择要保存的关系')
@@ -716,62 +716,21 @@ export default {
           }
         )
 
-        // 异常14修改：先保存关系，再保存最终知识
-        if (props.selectedDocument?.document_id) {
-          // 1. 保存关系到关系表
-          const relationRequestData = {
-            document_id: props.selectedDocument.document_id.toString(),
-            relations: confirmedRelations.value
+        ElMessage.success(`成功保存 ${confirmedRelations.value.length} 个关系到知识库`)
+        emit('knowledge-saved', {
+          success: true,
+          session_only: true,
+          message: '知识保存成功',
+          document_name: props.selectedDocument?.name || '',
+          document_id: props.selectedDocument?.document_id || '',
+          relations: confirmedRelations.value,
+          data: {
+            document_id: props.selectedDocument?.document_id || '',
+            document_name: props.selectedDocument?.name || '',
+            relations_count: confirmedRelations.value.length,
+            storage_type: 'frontend_session'
           }
-
-          try {
-            await axios.post(`${API_BASE_URL}/save-relations`, relationRequestData)
-          } catch (relationError) {
-            console.error('保存关系失败:', relationError)
-            throw new Error('保存关系失败')
-          }
-
-          // 2. 保存最终知识到知识表
-          const knowledgeRequestData = {
-            document_id: props.selectedDocument.document_id.toString(),
-            relations: confirmedRelations.value
-          }
-
-          const response = await axios.post(`${API_BASE_URL}/save-knowledge-new`, knowledgeRequestData)
-          
-          if (response.data && response.data.success) {
-            ElMessage.success(`成功保存 ${confirmedRelations.value.length} 个关系到知识库`)
-            emit('knowledge-saved', {
-              success: true,
-              document_name: props.selectedDocument.name,
-              document_id: props.selectedDocument.document_id,
-              relations: confirmedRelations.value,
-              data: response.data.data
-            })
-          } else {
-            ElMessage.error('保存知识失败')
-          }
-        } else {
-          // 保持向后兼容的旧方式
-          const requestData = {
-            document_name: props.selectedDocument.name,
-            relations: confirmedRelations.value
-          }
-
-          const response = await axios.post(`${API_BASE_URL}/save-knowledge`, requestData)
-          
-          if (response.data && response.data.success) {
-            ElMessage.success(`成功保存 ${confirmedRelations.value.length} 个关系到知识库`)
-            emit('knowledge-saved', {
-              success: true,
-              document_name: props.selectedDocument.name,
-              relations: confirmedRelations.value,
-              data: response.data.data
-            })
-          } else {
-            ElMessage.error('保存知识失败')
-          }
-        }
+        })
       } catch (error) {
         if (error !== 'cancel') {
           console.error('保存知识失败:', error)
@@ -793,47 +752,15 @@ export default {
       currentPage.value = 1
     })
 
-    // 异常23修复：页面初始化时立即检查关系表是否存在
-    const checkExistingRelations = async () => {
-      if (!props.selectedDocument?.document_id) {
-        return
-      }
-
-      try {
-        const response = await axios.get(`${API_BASE_URL}/documents/${props.selectedDocument.document_id}/relations`)
-        
-        if (response.data?.exists && response.data.relations && response.data.relations.length > 0) {
-          // 表存在且有数据，直接加载
-          relations.value = response.data.relations
-          ElMessage.success(`加载已有关系数据：${response.data.relations.length} 个关系`)
-          
-          // 可以选择自动选中所有关系，或者让用户手动选择
-          // confirmedRelations.value = response.data.relations
-          // emit('relations-changed', confirmedRelations.value)
-        } else {
-          // 表不存在或无数据
-          relations.value = []
-          console.log(`关系表不存在，等待用户选择自动抽取或手动添加`)
-        }
-      } catch (error) {
-        console.error('检查已有关系数据失败:', error)
-        relations.value = []
-      }
-    }
-
-    // 异常23修复：组件挂载时立即检查
+    // 切换文档时重置当前页面的抽取结果。
     onMounted(() => {
-      checkExistingRelations()
+      relations.value = []
+      confirmedRelations.value = []
     })
 
-    // 异常23修复：监听文档变化，自动重新检查
     watch(() => props.selectedDocument, () => {
-      if (props.selectedDocument?.document_id) {
-        checkExistingRelations()
-      } else {
-        relations.value = []
-        confirmedRelations.value = []
-      }
+      relations.value = []
+      confirmedRelations.value = []
     })
 
     // 注意：在传统的 setup() 函数中，不需要 defineExpose

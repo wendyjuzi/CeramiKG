@@ -25,7 +25,7 @@
           @click="importExtractedResults"
         >
           <el-icon><Upload /></el-icon>
-          导入抽取结果
+          全量导入图谱
         </el-button>
         <el-button 
           v-if="graphData && graphData.nodes.length > 0"
@@ -51,6 +51,12 @@
               clearable
               filterable
             >
+              <el-option
+                v-if="hasCurrentBuildGraph"
+                key="current-preview"
+                label="当前构建图谱"
+                value="current-preview"
+              />
               <el-option
                 key="all-knowledge"
                 label="所有知识"
@@ -120,7 +126,7 @@
           </div>
           <div class="control-item">
             <el-checkbox v-model="clearExistingOnImport">
-              导入前清空旧抽取图谱
+              重新构建全量图谱
             </el-checkbox>
           </div>
         </div>
@@ -361,6 +367,10 @@ export default {
     documentName: {
       type: String,
       default: ''
+    },
+    currentGraphData: {
+      type: Object,
+      default: null
     }
   },
   emits: ['node-selected', 'graph-loaded', 'update:document-id'],
@@ -382,11 +392,15 @@ export default {
     const globalGraphLimit = ref(2000)
     const includeAllGraphData = ref(false)
     const importRootPath = ref('relation')
-    const clearExistingOnImport = ref(true)
+    const clearExistingOnImport = ref(false)
     const scanLoading = ref(false)
     const importLoading = ref(false)
     const scanSummary = ref(null)
     const importSummary = ref(null)
+
+    const hasCurrentBuildGraph = computed(() => {
+      return Boolean(props.currentGraphData?.nodes?.length || props.currentGraphData?.edges?.length)
+    })
 
     // D3相关变量
     let svg, simulation, nodes, links, nodeElements, linkElements, labelElements, nodeGroups
@@ -494,27 +508,13 @@ export default {
     // 异常51修复：加载知识图谱选项列表
     const loadKnowledgeTables = async () => {
       try {
-        const response = await axios.get(`${API_BASE_URL}/knowledge-graph-options`)
+        const response = await axios.get(`${API_BASE_URL}/extracted-results/papers`)
         knowledgeTables.value = response.data || []
         console.log('加载知识图谱选项:', knowledgeTables.value)
       } catch (error) {
         console.error('加载知识图谱选项失败:', error)
         ElMessage.error('加载知识图谱选项失败')
-        // 回退到旧接口（兼容性）
-        try {
-          const fallbackResponse = await axios.get(`${API_BASE_URL}/knowledge-tables`)
-          const oldTables = fallbackResponse.data || []
-          // 转换为新格式
-          knowledgeTables.value = oldTables.map(table => ({
-            document_id: table,
-            display_name: table,
-            description: `表: ${table}`,
-            is_legacy: true
-          }))
-          console.log('使用旧接口获取表列表:', knowledgeTables.value)
-        } catch (fallbackError) {
-          console.error('旧接口也失败:', fallbackError)
-        }
+        knowledgeTables.value = []
       }
     }
 
@@ -568,6 +568,48 @@ export default {
       }
     }
 
+    const normalizeGraphData = (data) => {
+      const normalized = {
+        ...(data || {}),
+        nodes: [...(data?.nodes || [])],
+        edges: [...(data?.edges || [])],
+        metadata: data?.metadata || {}
+      }
+
+      normalized.nodes = normalized.nodes.map(node => ({
+        ...node,
+        type: node.type || node.entity_type || 'entity',
+        description: node.description || node.properties?.context || node.properties?.description || ''
+      }))
+      normalized.edges = normalized.edges.map(edge => ({
+        ...edge,
+        type: edge.type || edge.relation_type || 'RELATED_TO',
+        relation_type: edge.relation_type || edge.type || 'RELATED_TO',
+        confidence: edge.confidence ?? edge.properties?.confidence ?? 1,
+        evidence: edge.evidence || edge.properties?.evidence || edge.properties?.evidence_text || ''
+      }))
+
+      const degreeMap = {}
+      normalized.edges.forEach(edge => {
+        const sourceId = typeof edge.source === 'object' ? edge.source.id : edge.source
+        const targetId = typeof edge.target === 'object' ? edge.target.id : edge.target
+        degreeMap[sourceId] = (degreeMap[sourceId] || 0) + 1
+        degreeMap[targetId] = (degreeMap[targetId] || 0) + 1
+      })
+      normalized.nodes.forEach(node => {
+        node.degree = degreeMap[node.id] || 0
+      })
+
+      return normalized
+    }
+
+    const applyGraphData = async (data) => {
+      graphData.value = normalizeGraphData(data)
+      await nextTick()
+      renderGraph()
+      emit('graph-loaded', graphData.value)
+    }
+
     // 加载知识图谱数据
     const loadKnowledgeGraph = async () => {
       if (!selectedDocumentOption.value) {
@@ -580,55 +622,39 @@ export default {
         let response
 
         // 根据选择调用不同的API
-        if (selectedDocumentOption.value === 'all-knowledge') {
-          // 加载所有知识图谱
-          response = await axios.get(`${API_BASE_URL}/unified-knowledge-graph`, {
+        if (selectedDocumentOption.value === 'current-preview') {
+          if (!hasCurrentBuildGraph.value) {
+            graphData.value = null
+            ElMessage.warning('当前没有可加载的构建图谱')
+            return
+          }
+          await applyGraphData(props.currentGraphData)
+          ElMessage.success(`成功加载当前构建图谱：${graphData.value.nodes.length} 个节点，${graphData.value.edges.length} 条边`)
+          return
+        } else if (selectedDocumentOption.value === 'all-knowledge') {
+          response = await axios.get(`${API_BASE_URL}/extracted-results/graph`, {
             params: {
               limit: globalGraphLimit.value,
               include_all: includeAllGraphData.value
             }
           })
         } else {
-          // 加载特定文档的知识图谱
-          response = await axios.get(`${API_BASE_URL}/knowledge-graph/${selectedDocumentOption.value}`)
+          response = await axios.get(`${API_BASE_URL}/extracted-results/graph/${selectedDocumentOption.value}`)
         }
 
         if (response.data && response.data.nodes && response.data.edges) {
-          graphData.value = response.data
-          graphData.value.nodes = graphData.value.nodes.map(node => ({
-            ...node,
-            description: node.description || node.properties?.context || ''
-          }))
-          graphData.value.edges = graphData.value.edges.map(edge => ({
-            ...edge,
-            confidence: edge.confidence ?? edge.properties?.confidence ?? 1,
-            evidence: edge.evidence || edge.properties?.evidence || edge.properties?.evidence_text || ''
-          }))
-
-          // 计算节点度数
-          const degreeMap = {}
-          graphData.value.edges.forEach(edge => {
-            const sourceId = typeof edge.source === 'object' ? edge.source.id : edge.source
-            const targetId = typeof edge.target === 'object' ? edge.target.id : edge.target
-            degreeMap[sourceId] = (degreeMap[sourceId] || 0) + 1
-            degreeMap[targetId] = (degreeMap[targetId] || 0) + 1
-          })
-          graphData.value.nodes.forEach(node => {
-            node.degree = degreeMap[node.id] || 0
-          })
-
-          await nextTick()
-          renderGraph()
-          emit('graph-loaded', graphData.value)
+          await applyGraphData(response.data)
 
           // 异常51修复：改进成功消息显示
           let selectedTypeName = '所有知识'
-          if (selectedDocumentOption.value !== 'all-knowledge') {
+          if (selectedDocumentOption.value === 'current-preview') {
+            selectedTypeName = '当前构建'
+          } else if (selectedDocumentOption.value !== 'all-knowledge') {
             // 查找对应的显示名称
             const selectedOption = knowledgeTables.value.find(opt => opt.document_id === selectedDocumentOption.value)
             selectedTypeName = selectedOption ? selectedOption.display_name : selectedDocumentOption.value
           }
-          const truncatedText = graphData.value.metadata?.truncated ? '（全局样本）' : ''
+          const truncatedText = graphData.value.metadata?.truncated ? '（样本）' : ''
           const fullText = graphData.value.metadata?.include_all ? '（全部数据）' : ''
           ElMessage.success(`成功加载${selectedTypeName}图谱${truncatedText}${fullText}：${graphData.value.nodes.length} 个节点，${graphData.value.edges.length} 条边`)
         } else {
@@ -654,6 +680,7 @@ export default {
 
     const loadRequestedDocumentGraph = async () => {
       if (!props.documentId) return
+      if (hasCurrentBuildGraph.value && selectedDocumentOption.value === 'current-preview') return
       const option = knowledgeTables.value.find(
         item => String(item.document_id) === String(props.documentId)
       )
@@ -1171,9 +1198,22 @@ export default {
     // 生命周期
     onMounted(async () => {
       await loadKnowledgeTables()
-      await loadRequestedDocumentGraph()
+      if (hasCurrentBuildGraph.value) {
+        selectedDocumentOption.value = 'current-preview'
+        await loadKnowledgeGraph()
+      } else {
+        await loadRequestedDocumentGraph()
+      }
       window.addEventListener('resize', resizeHandler)
     })
+
+    watch(() => props.currentGraphData, async () => {
+      if (!hasCurrentBuildGraph.value) return
+      if (!selectedDocumentOption.value || selectedDocumentOption.value === 'current-preview') {
+        selectedDocumentOption.value = 'current-preview'
+        await loadKnowledgeGraph()
+      }
+    }, { deep: true })
 
     watch(() => props.documentId, async (documentId) => {
       if (!documentId || String(documentId) === String(selectedDocumentOption.value)) return
@@ -1210,6 +1250,7 @@ export default {
       importLoading,
       scanSummary,
       importSummary,
+      hasCurrentBuildGraph,
       nodeTypes,
       edgeTypes,
       neighbors,
