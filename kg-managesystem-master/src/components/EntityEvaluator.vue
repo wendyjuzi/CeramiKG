@@ -861,7 +861,7 @@ export default {
           }
         )
 
-        // 异常14新增：保存实体到MySQL
+        // 确认实体选择，供后续关系抽取使用。
         if (props.selectedDocument?.document_id) {
           try {
             const saveRequestData = {
@@ -870,10 +870,10 @@ export default {
             }
 
             await axios.post(`${API_BASE_URL}/save-entities`, saveRequestData)
-            ElMessage.success(`已确认并保存 ${confirmedEntities.value.length} 个实体`)
+            ElMessage.success(`已确认 ${confirmedEntities.value.length} 个实体`)
           } catch (saveError) {
-            console.error('保存实体失败:', saveError)
-            ElMessage.warning('实体确认成功，但保存到数据库失败，可在后续步骤中重试')
+            console.error('确认实体失败:', saveError)
+            ElMessage.warning('实体已在前端确认，但后端确认接口返回失败，可继续关系抽取')
           }
         }
 
@@ -1142,47 +1142,15 @@ export default {
       window.URL.revokeObjectURL(url)
     }
 
-    // 异常23修复：页面初始化时立即检查实体表是否存在
-    const checkExistingEntities = async () => {
-      if (!props.selectedDocument?.document_id) {
-        return
-      }
-
-      try {
-        const response = await axios.get(`${API_BASE_URL}/documents/${props.selectedDocument.document_id}/entities`)
-        
-        if (response.data?.exists && response.data.entities && response.data.entities.length > 0) {
-          // 表存在且有数据，直接加载
-          entities.value = response.data.entities
-          ElMessage.success(`加载已有实体数据：${response.data.entities.length} 个实体`)
-          
-          // 可以选择自动选中所有实体，或者让用户手动选择
-          // confirmedEntities.value = response.data.entities
-          // emit('entities-changed', confirmedEntities.value)
-        } else {
-          // 表不存在或无数据
-          entities.value = []
-          console.log(`实体表不存在，等待用户选择自动抽取或手动添加`)
-        }
-      } catch (error) {
-        console.error('检查已有实体数据失败:', error)
-        entities.value = []
-      }
-    }
-
-    // 异常23修复：组件挂载时立即检查
+    // 切换文档时重置当前页面的抽取结果。
     onMounted(() => {
-      checkExistingEntities()
+      entities.value = []
+      confirmedEntities.value = []
     })
 
-    // 异常23修复：监听文档变化，自动重新检查
     watch(() => props.selectedDocument, () => {
-      if (props.selectedDocument?.document_id) {
-        checkExistingEntities()
-      } else {
-        entities.value = []
-        confirmedEntities.value = []
-      }
+      entities.value = []
+      confirmedEntities.value = []
     })
 
     return {

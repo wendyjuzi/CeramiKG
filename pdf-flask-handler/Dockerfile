@@ -1,8 +1,8 @@
 FROM python:3.10-slim-bookworm
 
-# 优化国内网络连接 (Debian 镜像�?& PyPI 镜像�?
-RUN sed -i 's/deb.debian.org/deb.debian.org/g' /etc/apt/sources.list.d/debian.sources \
-    && echo '[global]\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple/\ntrusted-host = deb.debian.org' > /etc/pip.conf
+# 优化国内网络连接 (Debian 镜像源 & PyPI 镜像源)
+RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g; s/security.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources \
+    && echo '[global]\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple/\ntrusted-host = pypi.tuna.tsinghua.edu.cn' > /etc/pip.conf
 
 # 配置 HuggingFace 镜像 (用于后续下载模型)
 ENV HF_ENDPOINT=https://hf-mirror.com
@@ -66,7 +66,7 @@ COPY pdf-flask-handler/app.py /app/app.py
 COPY pdf-flask-handler/rag_adapter.py /app/rag_adapter.py
 COPY pdf-flask-handler/uploads /app/uploads-sample
 COPY pdf-flask-handler/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 EXPOSE 8001
 

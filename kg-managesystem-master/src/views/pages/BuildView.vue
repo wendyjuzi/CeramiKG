@@ -72,8 +72,8 @@
       <div v-show="currentStep === 5" class="step-panel">
         <div class="knowledge-storage">
           <div class="storage-header">
-            <h3>💾 知识存储</h3>
-            <p>关系数据已保存到数据库，可以进行图谱可视化</p>
+            <h3>知识存储</h3>
+            <p>关系数据已保存到知识库，可以进行图谱可视化</p>
           </div>
 
           <div v-if="storageResult" class="storage-summary">
@@ -91,8 +91,8 @@
                     <el-descriptions-item label="关系数量">
                       {{ storageResult.data.relations_count || storageResult.data.knowledges_count || storageResult.relations?.length || 0 }}
                     </el-descriptions-item>
-                    <el-descriptions-item label="表名" v-if="storageResult.data.table_info || storageResult.data.table_name">
-                      {{ storageResult.data.table_info?.table_name || storageResult.data.table_name }}
+                    <el-descriptions-item label="存储方式">
+                      {{ storageResult.data.storage_type === 'frontend_session' ? '知识图谱' : storageResult.data.storage_type || '知识图谱' }}
                     </el-descriptions-item>
                     <el-descriptions-item label="存储时间">
                       {{ new Date().toLocaleString('zh-CN') }}
@@ -112,10 +112,11 @@
       </div>
 
       <!-- 步骤6: 图谱展示 -->
-      <div v-show="currentStep === 6" class="step-panel">
+      <div v-if="currentStep === 6" class="step-panel">
         <KnowledgeGraph
           :document-id="selectedDocument?.document_id || ''"
           :document-name="selectedDocument?.name || ''"
+          :current-graph-data="currentBuildGraphData"
           @update:document-id="handleDocumentIdUpdate"
           @node-selected="handleNodeSelected"
           @graph-loaded="handleGraphLoaded"
@@ -215,6 +216,108 @@ const knowledgeGraphData = ref(null)
 
 // 加载状态
 const isProcessing = ref(false)
+const currentBuildGraphLimit = 2000
+const currentBuildStandaloneNodeLimit = 300
+
+const normalizeKey = (value) => String(value || '').trim().toLowerCase()
+
+const makeCurrentBuildNodeId = (value, fallback) => {
+  const raw = String(value || fallback || '').trim()
+  if (!raw) return 'current_entity_unknown'
+  return `current_${raw.replace(/\s+/g, '_').replace(/[^\w\u4e00-\u9fa5-]/g, '_')}`
+}
+
+const currentBuildGraphData = computed(() => {
+  const nodesById = new Map()
+  const nameToId = new Map()
+
+  const addNode = (id, name, type = 'entity', extra = {}) => {
+    const nodeId = String(id || makeCurrentBuildNodeId(name, nodesById.size + 1))
+    const nodeName = String(name || nodeId)
+    if (!nodesById.has(nodeId)) {
+      nodesById.set(nodeId, {
+        id: nodeId,
+        name: nodeName,
+        type: type || 'entity',
+        properties: {
+          source: 'current_build',
+          ...extra
+        }
+      })
+    }
+    if (nodeName) {
+      nameToId.set(normalizeKey(nodeName), nodeId)
+    }
+    return nodeId
+  }
+
+  confirmedEntities.value.forEach((entity, index) => {
+    const name = entity.entity_name || entity.name || entity.text || `实体${index + 1}`
+    const id = entity.entity_id || entity.id || makeCurrentBuildNodeId(name, index + 1)
+    addNode(id, name, entity.type || entity.entity_type || 'entity', {
+      confidence: entity.confidence,
+      description: entity.description
+    })
+  })
+
+  const limitedRelations = confirmedRelations.value.slice(0, currentBuildGraphLimit)
+  const visibleNodeIds = new Set()
+  const edges = limitedRelations.map((relation, index) => {
+    const sourceName = relation.head_entity || relation.head_entity_name || relation.source_entity || relation.source || ''
+    const targetName = relation.tail_entity || relation.tail_entity_name || relation.target_entity || relation.target || ''
+    const sourceId = relation.head_entity_id || relation.source_entity_id || nameToId.get(normalizeKey(sourceName)) || makeCurrentBuildNodeId(sourceName, `source_${index}`)
+    const targetId = relation.tail_entity_id || relation.target_entity_id || nameToId.get(normalizeKey(targetName)) || makeCurrentBuildNodeId(targetName, `target_${index}`)
+
+    addNode(sourceId, sourceName || sourceId)
+    addNode(targetId, targetName || targetId)
+    visibleNodeIds.add(String(sourceId))
+    visibleNodeIds.add(String(targetId))
+
+    const relationType = relation.relation_name || relation.relation_type || relation.type || 'RELATED_TO'
+    return {
+      id: String(relation.relation_id || relation.id || `current_relation_${index + 1}`),
+      source: String(sourceId),
+      target: String(targetId),
+      type: relationType,
+      relation_type: relationType,
+      confidence: relation.confidence ?? 1,
+      properties: {
+        source: 'current_build',
+        description: relation.description || '',
+        evidence: relation.evidence_text || relation.evidence || '',
+        confidence: relation.confidence ?? 1
+      }
+    }
+  })
+
+  const visibleNodes = []
+  const standaloneNodes = []
+  nodesById.forEach((node) => {
+    if (visibleNodeIds.has(node.id)) {
+      visibleNodes.push(node)
+    } else if (standaloneNodes.length < currentBuildStandaloneNodeLimit) {
+      standaloneNodes.push(node)
+    }
+  })
+
+  return {
+    nodes: [...visibleNodes, ...standaloneNodes],
+    edges,
+    metadata: {
+      source: 'current_build',
+      document_id: selectedDocument.value?.document_id || '',
+      document_name: selectedDocument.value?.name || '',
+      total_entities: nodesById.size,
+      total_nodes: visibleNodes.length + standaloneNodes.length,
+      total_edges: edges.length,
+      total_relations: confirmedRelations.value.length,
+      limit: currentBuildGraphLimit,
+      truncated: confirmedRelations.value.length > limitedRelations.length || nodesById.size > visibleNodes.length + standaloneNodes.length,
+      include_all: confirmedRelations.value.length <= limitedRelations.length && nodesById.size <= visibleNodes.length + standaloneNodes.length,
+      session_only: true
+    }
+  }
+})
 
 // 计算属性
 const canProceed = computed(() => {

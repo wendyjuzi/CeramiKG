@@ -198,7 +198,55 @@ async def delete_term(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除术语失败: {str(e)}")
 
-# 3.3 知识抽取接口（使用Neo4j）
+# 3.3 在线知识抽取接口（保存接口由前端会话承接，避免污染底层图谱）
+
+ONLINE_SESSION_STORAGE_TYPE = "frontend_session"
+
+
+def _relation_entity_keys(entity: Entity) -> set:
+    return {
+        str(value).strip().lower()
+        for value in (
+            entity.entity_id,
+            entity.entity_name,
+            getattr(entity, "name", None),
+        )
+        if value is not None and str(value).strip()
+    }
+
+
+def _filter_relations_for_entities(relations: List[Relation], entities: List[Entity]) -> List[Relation]:
+    selected_keys = set()
+    for entity in entities:
+        selected_keys.update(_relation_entity_keys(entity))
+
+    if not selected_keys:
+        return []
+
+    filtered = []
+    for relation in relations:
+        head_keys = {
+            str(value).strip().lower()
+            for value in (
+                relation.head_entity_id,
+                relation.head_entity,
+                relation.head_entity_name,
+            )
+            if value is not None and str(value).strip()
+        }
+        tail_keys = {
+            str(value).strip().lower()
+            for value in (
+                relation.tail_entity_id,
+                relation.tail_entity,
+                relation.tail_entity_name,
+            )
+            if value is not None and str(value).strip()
+        }
+        if head_keys & selected_keys and tail_keys & selected_keys:
+            filtered.append(relation)
+
+    return filtered
 
 @router.get("/documents/{document_id}/entities")
 async def get_document_entities(
@@ -252,10 +300,10 @@ async def get_document_entities(
 async def extract_entities(
     request: EntityExtractionRequest, 
     prompt_service: PromptService = Depends(get_prompt_service),
-    neo4j_service: Neo4jService = Depends(get_neo4j_service),
-    mongo_service_extended: MongoServiceExtended = Depends(get_mongo_service_extended)
+    mongo_service_extended: MongoServiceExtended = Depends(get_mongo_service_extended),
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
 ):
-    """实体识别（使用Neo4j缓存）
+    """实体识别（可只读缓存加速，保存不写入Neo4j）
     
     优化逻辑：
     1. 统一缓存检查，避免重复查询
@@ -267,16 +315,17 @@ async def extract_entities(
         # 检查文档是否存在
         if not request.document:
             raise HTTPException(status_code=400, detail="文档信息不能为空")
-        
-        # 统一缓存检查逻辑，避免重复查询
-        cached_entities = None
+
         if request.document_id:
-            entity_exists = await neo4j_service.check_entity_table_exists(request.document_id)
-            if entity_exists:
-                cached_entities = await neo4j_service.get_entities_from_table(request.document_id)
-                if cached_entities:
-                    logger.info(f"从Neo4j缓存返回 {len(cached_entities)} 个实体")
-                    return cached_entities
+            try:
+                entity_exists = await neo4j_service.check_entity_table_exists(request.document_id)
+                if entity_exists:
+                    cached_entities = await neo4j_service.get_entities_from_table(request.document_id)
+                    if cached_entities:
+                        logger.info(f"从Neo4j只读缓存返回 {len(cached_entities)} 个实体")
+                        return cached_entities
+            except Exception as cache_error:
+                logger.info(f"读取实体缓存失败，继续在线抽取: {cache_error}")
         
         # 尝试使用分块抽取逻辑
         if request.document_id:
@@ -296,9 +345,8 @@ async def extract_entities(
                         terms=request.terms if request.terms else None
                     )
                     
-                    # 转换并保存结果
+                    # 转换结果并直接返回给前端。
                     if result.get("entities"):
-                        entities_to_save = []
                         entities_to_return = []
                         
                         for entity_data in result["entities"]:
@@ -323,12 +371,9 @@ async def extract_entities(
                                 position=positions if positions else None,
                                 occurrence_count=entity_data.get("occurrence_count", 0)
                             )
-                            entities_to_save.append(entity)
                             entities_to_return.append(entity)
-                        
-                        # 保存到Neo4j
-                        await neo4j_service.save_entities_to_table(request.document_id, entities_to_save)
-                        logger.info(f"分块实体识别完成，保存了 {len(entities_to_save)} 个实体到Neo4j")
+
+                        logger.info(f"分块实体识别完成，返回 {len(entities_to_return)} 个实体")
                         
                         return entities_to_return
                     else:
@@ -358,12 +403,11 @@ async def extract_entities(
 
 @router.post("/save-entities", response_model=APIResponse)
 async def save_entities(
-    request: EntityStorageRequest,
-    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+    request: EntityStorageRequest
 ):
-    """保存用户确认的实体到Neo4j
+    """确认用户选择的实体（会话级保存，不写入底层图谱）
     
-    用户在前端确认实体信息后，调用此接口保存到Neo4j图数据库
+    用户在前端确认实体信息后，调用此接口返回保存成功结果。
     """
     try:
         if not request.document_id:
@@ -372,16 +416,14 @@ async def save_entities(
         if not request.entities:
             raise HTTPException(status_code=400, detail="实体列表不能为空")
         
-        # 保存实体到Neo4j
-        await neo4j_service.save_entities_to_table(request.document_id, request.entities)
-        
         return APIResponse(
             success=True,
             message="实体保存成功",
             data={
                 "document_id": request.document_id,
                 "entities_count": len(request.entities),
-                "storage_type": "neo4j"
+                "storage_type": ONLINE_SESSION_STORAGE_TYPE,
+                "session_only": True
             }
         )
     except HTTPException:
@@ -441,10 +483,10 @@ async def get_document_relations(
 async def extract_relations(
     request: RelationExtractionRequest, 
     prompt_service: PromptService = Depends(get_prompt_service),
-    neo4j_service: Neo4jService = Depends(get_neo4j_service),
-    mongo_service_extended: MongoServiceExtended = Depends(get_mongo_service_extended)
+    mongo_service_extended: MongoServiceExtended = Depends(get_mongo_service_extended),
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
 ):
-    """关系抽取（使用Neo4j缓存）
+    """关系抽取（可只读缓存加速，保存不写入Neo4j）
     
     优化逻辑：
     1. 统一缓存检查，避免重复查询
@@ -455,16 +497,22 @@ async def extract_relations(
     try:
         if not request.entities:
             raise HTTPException(status_code=400, detail="实体列表不能为空")
-        
-        # 统一缓存检查逻辑，避免重复查询
-        cached_relations = None
+
         if request.document_id:
-            relation_exists = await neo4j_service.check_relation_table_exists(request.document_id)
-            if relation_exists:
-                cached_relations = await neo4j_service.get_relations_from_table(request.document_id)
-                if cached_relations:
-                    logger.info(f"从Neo4j缓存返回 {len(cached_relations)} 个关系")
-                    return cached_relations
+            try:
+                relation_exists = await neo4j_service.check_relation_table_exists(request.document_id)
+                if relation_exists:
+                    cached_relations = await neo4j_service.get_relations_from_table(request.document_id)
+                    filtered_relations = _filter_relations_for_entities(cached_relations, request.entities)
+                    if filtered_relations:
+                        logger.info(
+                            "从Neo4j只读缓存返回 %s/%s 个局部关系",
+                            len(filtered_relations),
+                            len(cached_relations),
+                        )
+                        return filtered_relations
+            except Exception as cache_error:
+                logger.info(f"读取关系缓存失败，继续在线抽取: {cache_error}")
         
         # 尝试使用分块抽取逻辑
         if request.document_id:
@@ -514,12 +562,11 @@ async def extract_relations(
 
 @router.post("/save-relations", response_model=APIResponse)
 async def save_relations(
-    request: RelationStorageRequest,
-    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+    request: RelationStorageRequest
 ):
-    """保存用户确认的关系到Neo4j
+    """确认用户选择的关系（会话级保存，不写入底层图谱）
     
-    用户在前端确认关系信息后，调用此接口保存到Neo4j图数据库
+    用户在前端确认关系信息后，调用此接口返回保存成功结果。
     """
     try:
         if not request.document_id:
@@ -528,16 +575,14 @@ async def save_relations(
         if not request.relations:
             raise HTTPException(status_code=400, detail="关系列表不能为空")
         
-        # 保存关系到Neo4j
-        await neo4j_service.save_relations_to_table(request.document_id, request.relations)
-        
         return APIResponse(
             success=True,
             message="关系保存成功",
             data={
                 "document_id": request.document_id,
                 "relations_count": len(request.relations),
-                "storage_type": "neo4j"
+                "storage_type": ONLINE_SESSION_STORAGE_TYPE,
+                "session_only": True
             }
         )
     except HTTPException:
@@ -550,11 +595,10 @@ async def extract_chunked_knowledge(
     document_id: str,
     terms: List[Term] = [],
     force: bool = Query(False, description="是否强制重新抽取，覆盖现有数据"),
-    mongo_service_extended: MongoServiceExtended = Depends(get_mongo_service_extended),
-    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+    mongo_service_extended: MongoServiceExtended = Depends(get_mongo_service_extended)
 ):
     """
-    分块知识抽取接口（使用Neo4j）
+    分块知识抽取接口（会话级构建）
     
     按 page_idx 将文档分 chunk 逐个调用大模型进行实体识别与关系抽取，
     并正确处理跨 chunk 被截断的实体与关系。
@@ -573,30 +617,7 @@ async def extract_chunked_knowledge(
             
         logger.info(f"开始分块知识抽取，文档ID: {document_id}, 术语数量: {len(terms)}, 强制模式: {force}")
         
-        # 1. 检查是否已有缓存（如果不是强制模式）
-        if not force:
-            entity_exists = await neo4j_service.check_entity_table_exists(document_id)
-            relation_exists = await neo4j_service.check_relation_table_exists(document_id)
-            
-            if entity_exists and relation_exists:
-                # 从缓存返回结果
-                entities = await neo4j_service.get_entities_from_table(document_id)
-                relations = await neo4j_service.get_relations_from_table(document_id)
-                
-                logger.info(f"从Neo4j缓存返回结果: {len(entities)} 实体, {len(relations)} 关系")
-                return {
-                    "entities": [entity.dict() for entity in entities],
-                    "relations": [relation.dict() for relation in relations],
-                    "meta": {
-                        "document_id": document_id,
-                        "total_entities": len(entities),
-                        "total_relations": len(relations),
-                        "source": "neo4j_cache",
-                        "processing_method": "chunked_extraction"
-                    }
-                }
-        
-        # 2. 获取文档的json_data
+        # 1. 获取文档的json_data
         doc_data = await mongo_service_extended.get_document_by_document_id(document_id)
         if not doc_data:
             raise HTTPException(status_code=404, detail=f"文档 {document_id} 不存在")
@@ -605,69 +626,23 @@ async def extract_chunked_knowledge(
         if not json_data:
             raise HTTPException(status_code=400, detail=f"文档 {document_id} 没有json_data内容")
         
-        # 3. 执行分块知识抽取
+        # 2. 执行分块知识抽取
         chunked_service = ChunkedIEService()
         result = await chunked_service.extract_chunked_knowledge(
             document_id=document_id,
             json_data=json_data,
             terms=terms if terms else None
         )
-        
-        # 4. 将结果保存到Neo4j（如果有实体和关系）
-        if result.get("entities"):
-            # 转换为Entity对象
-            entities_to_save = []
-            for entity_data in result["entities"]:
-                # 处理位置信息
-                positions = []
-                for pos in entity_data.get("positions", []):
-                    from app.models.schemas import EntityPosition
-                    position = EntityPosition(
-                        start=pos.get("start", 0),
-                        end=pos.get("end", 0),
-                        context=pos.get("context", "")
-                    )
-                    positions.append(position)
-                
-                entity = Entity(
-                    entity_id=entity_data.get("entity_id"),
-                    entity_name=entity_data["entity_name"],
-                    type=entity_data.get("entity_type"),
-                    attributes=entity_data.get("attributes"),
-                    description=entity_data.get("description"),
-                    confidence=entity_data.get("confidence", 1.0),
-                    position=positions if positions else None,
-                    occurrence_count=entity_data.get("occurrence_count", 0)
-                )
-                entities_to_save.append(entity)
-            
-            # 保存实体到Neo4j
-            await neo4j_service.save_entities_to_table(document_id, entities_to_save)
-            logger.info(f"保存了 {len(entities_to_save)} 个实体到Neo4j")
-        
-        if result.get("relations"):
-            # 转换为Relation对象
-            relations_to_save = []
-            for relation_data in result["relations"]:
-                relation = Relation(
-                    id=relation_data.get("id"),
-                    relation_id=relation_data.get("relation_id"),
-                    relation_name=relation_data["relation_name"],
-                    head_entity=relation_data.get("head_entity_name", ""),
-                    tail_entity=relation_data.get("tail_entity_name", ""),
-                    description=relation_data.get("description"),
-                    evidence_text=relation_data.get("evidence_text"),
-                    confidence=relation_data.get("confidence", 1.0),
-                    head_entity_id=relation_data.get("head_entity_id"),
-                    tail_entity_id=relation_data.get("tail_entity_id")
-                )
-                relations_to_save.append(relation)
-            
-            # 保存关系到Neo4j
-            await neo4j_service.save_relations_to_table(document_id, relations_to_save)
-            logger.info(f"保存了 {len(relations_to_save)} 个关系到Neo4j")
-        
-        # 5. 返回结果
+
+        result.setdefault("meta", {})
+        result["meta"].update({
+            "document_id": document_id,
+            "source": ONLINE_SESSION_STORAGE_TYPE,
+            "session_only": True,
+            "processing_method": "chunked_extraction"
+        })
+
+        # 3. 返回结果
         logger.info(f"分块知识抽取完成: {len(result.get('entities', []))} 实体, {len(result.get('relations', []))} 关系")
         return JSONResponse(
             content=result,
@@ -680,7 +655,7 @@ async def extract_chunked_knowledge(
         logger.error(f"分块知识抽取失败: {e}")
         raise HTTPException(status_code=500, detail=f"分块知识抽取失败: {str(e)}")
 
-# 3.4 知识存储接口（使用Neo4j）
+# 3.4 在线知识确认接口（会话级保存，避免污染底层图谱）
 
 @router.get("/knowledge/{document_id}", response_model=List[Relation])
 async def get_knowledge(
@@ -716,12 +691,11 @@ async def get_knowledge(
 
 @router.post("/save-knowledge-new", response_model=APIResponse)
 async def save_knowledge_new(
-    request: KnowledgeStorageRequestNew,
-    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+    request: KnowledgeStorageRequestNew
 ):
-    """保存最终确认的知识到Neo4j
+    """确认最终知识（会话级保存，不写入底层图谱）
     
-    用户在前端最终确认知识信息后，调用此接口保存到Neo4j图数据库
+    用户在前端最终确认知识信息后，调用此接口返回保存成功结果。
     """
     try:
         if not request.document_id:
@@ -730,16 +704,15 @@ async def save_knowledge_new(
         if not request.relations:
             raise HTTPException(status_code=400, detail="知识列表不能为空")
         
-        # 保存知识到Neo4j（双重保存：文档级+全局级）
-        await neo4j_service.save_knowledges_to_table(request.document_id, request.relations)
-        
         return APIResponse(
             success=True,
             message="知识保存成功",
             data={
                 "document_id": request.document_id,
                 "knowledges_count": len(request.relations),
-                "storage_type": "neo4j"
+                "relations_count": len(request.relations),
+                "storage_type": ONLINE_SESSION_STORAGE_TYPE,
+                "session_only": True
             }
         )
     except HTTPException:
@@ -747,7 +720,7 @@ async def save_knowledge_new(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"知识保存失败: {str(e)}")
 
-# 3.5 知识图谱数据接口（使用Neo4j）
+# 3.5 离线抽取结果图谱接口（relation目录导入Neo4j）
 
 @router.get("/extracted-results/scan")
 async def scan_extracted_kg_results(
@@ -823,6 +796,56 @@ async def get_extracted_unified_graph(
     except Exception as e:
         logger.error(f"获取抽取结果全局图谱失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取抽取结果全局图谱失败: {str(e)}")
+
+@router.get("/extracted-results/papers", response_model=List[KnowledgeGraphOption])
+async def list_extracted_papers(
+    neo4j_service: Neo4jService = Depends(get_neo4j_service)
+):
+    """List only papers imported from relation/**/extracted.json."""
+    try:
+        async with neo4j_service._session() as session:
+            result = await session.run("""
+                MATCH (p:Paper)
+                WHERE p.source = 'relation_extracted'
+                OPTIONAL MATCH (p)-[:MENTIONS]->(e:CeramicEntity)
+                WITH p, count(DISTINCT e) AS entity_count
+                OPTIONAL MATCH (:CeramicEntity)-[r:CERAMIC_RELATION {paper_id: p.paper_id}]->(:CeramicEntity)
+                RETURN p.paper_id AS document_id,
+                       p.title AS title,
+                       p.doi AS doi,
+                       p.year AS year,
+                       entity_count AS entity_count,
+                       count(DISTINCT r) AS relation_count
+                ORDER BY title
+            """)
+
+            options = []
+            async for record in result:
+                document_id = record["document_id"]
+                if not document_id:
+                    continue
+
+                meta_bits = []
+                if record["year"]:
+                    meta_bits.append(str(record["year"]))
+                if record["doi"]:
+                    meta_bits.append(str(record["doi"]))
+                description_suffix = f" ({', '.join(meta_bits)})" if meta_bits else ""
+                entity_count = record["entity_count"] or 0
+                relation_count = record["relation_count"] or 0
+
+                options.append(KnowledgeGraphOption(
+                    document_id=document_id,
+                    display_name=record["title"] or document_id,
+                    description=f"Imported ceramic KG from relation/extracted.json{description_suffix}",
+                    table_count=entity_count + relation_count,
+                    is_legacy=False
+                ))
+
+            return options
+    except Exception as e:
+        logger.error(f"获取离线抽取论文列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取离线抽取论文列表失败: {str(e)}")
 
 @router.get("/extracted-results/graph/{paper_id}", response_model=KnowledgeGraphResponse)
 async def get_extracted_graph_by_paper(
